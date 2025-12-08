@@ -1,0 +1,6 @@
+streamlit
+FlightRadarAPI
+requests
+pandas
+python-dateutil
+brotli

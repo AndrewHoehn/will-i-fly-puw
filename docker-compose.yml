@@ -1,0 +1,21 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persistent volume for database
+      - ./data:/app/data
+      # Mount backups directory
+      - ./backups:/app/backups
+    environment:
+      - RAPIDAPI_KEY=${RAPIDAPI_KEY}
+      - AVIATIONSTACK_KEY=${AVIATIONSTACK_KEY}
+      - DATABASE_PATH=/app/data/history.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/dashboard"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

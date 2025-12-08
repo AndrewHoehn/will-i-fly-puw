@@ -1,0 +1,28 @@
+# Security: Don't include secrets
+.env
+.env.*
+*.key
+*.pem
+
+# Python: Don't include cache or venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# System
+.DS_Store
+.git
+.gitignore
+
+# Data (Optional: Exclude local DBs if you want a fresh start, 
+# but for now we might want to copy them if not using volumes locally)
+# history.db
+# flights.db
+# flights.db.backup
