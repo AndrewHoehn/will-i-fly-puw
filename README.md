@@ -1,6 +1,6 @@
 # ✈️ Will I Fly PUW
 
-A real-time flight cancellation prediction system for Pullman-Moscow Regional Airport (KPUW). Get accurate cancellation risk scores based on weather conditions, historical data, and seasonal trends before your flight.
+A (near)real-time flight cancellation prediction system for Pullman-Moscow Regional Airport (KPUW). Get accurate cancellation risk scores based on weather conditions, historical data, and seasonal trends before your flight.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
@@ -23,7 +23,7 @@ A real-time flight cancellation prediction system for Pullman-Moscow Regional Ai
 
 ## 🌐 Live Demo
 
-**Visit the live application:** [https://kpuw-tracker.fly.dev/](https://kpuw-tracker.fly.dev/)
+**Visit the live application:** [https://williflypuw.com/](https://williflypuw.com/)
 
 ### Key Features in Action:
 - Real-time flight tracking with weather-based risk scores (0-100%)
@@ -45,7 +45,7 @@ A real-time flight cancellation prediction system for Pullman-Moscow Regional Ai
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/will-i-fly-puw.git
+git clone https://github.com/andrewhoehn/will-i-fly-puw.git
 cd will-i-fly-puw
 ```
 
@@ -371,22 +371,13 @@ The app uses `/data` to store the SQLite database and logs, ensuring data persis
 
 ## 📊 Performance
 
-- **Database Size**: ~2MB (1,316 records)
+- **Database Size**: ~2MB (1,316 records and building)
 - **API Response Time**: <100ms average
 - **Sync Duration**:
   - Quick sync: ~2-3 seconds
   - Full sync: ~8-10 seconds
 - **Frontend Load**: <500ms
 
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ## 📜 License
 
@@ -399,25 +390,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Open-Meteo** - Weather data API
 - **Lucide React** - Icon library
 - **Framer Motion** - Animation library
-
-## 📧 Contact
-
-For questions, suggestions, or issues:
-- **GitHub Issues**: [Create an issue](https://github.com/yourusername/will-i-fly-puw/issues)
-- **Discussions**: [Start a discussion](https://github.com/yourusername/will-i-fly-puw/discussions)
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
-## 🗺️ Roadmap
-
-- [ ] SMS/Email notifications for high-risk flights
-- [ ] Mobile app (React Native)
-- [ ] Support for additional airports
-- [ ] Machine learning model training
-- [ ] CI/CD pipeline
-- [ ] API rate limiting and caching
-- [ ] User accounts and saved flights
-
----
-
-**Built with ❤️ for travelers in the Palouse region**
