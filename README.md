@@ -1,6 +1,6 @@
 # ✈️ Will I Fly PUW
 
-A (near)real-time flight cancellation prediction system for Pullman-Moscow Regional Airport (KPUW). Get accurate cancellation risk scores based on weather conditions, historical data, and seasonal trends before your flight.
+A (near)real-time flight cancellation prediction system for Pullman-Moscow Regional Airport (KPUW). Get (possibly semi-)accurate cancellation risk scores based on weather conditions, historical data, and seasonal trends before your flight.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
@@ -377,6 +377,268 @@ The app uses `/data` to store the SQLite database and logs, ensuring data persis
   - Quick sync: ~2-3 seconds
   - Full sync: ~8-10 seconds
 - **Frontend Load**: <500ms
+
+# 🔧 Adapting for Other Airports
+
+This application should be able to be adapted for any airport with minimal changes. You'll need to update configuration values and gather some airport-specific data.
+
+**Warning - I haven't tried/tested this**
+
+---
+
+### Step 1: Update Airport Configuration
+
+#### **Backend: flight_data.py** (Lines 15-16)
+Update the airport ICAO code:
+```python
+class FlightData:
+    def __init__(self):
+        self.airport_icao = "KORD"  # Change from KPUW to your airport (e.g., KORD for Chicago O'Hare)
+        self.airport_iata = "ORD"   # Change from PUW to your airport's IATA code
+```
+
+**Finding Your Airport Code:**
+- ICAO codes: 4 letters (e.g., KORD, KSEA, KJFK) - [ICAO Search](https://www.icao.int/)
+- IATA codes: 3 letters (e.g., ORD, SEA, JFK) - [IATA Search](https://www.iata.org/en/publications/directories/code-search/)
+- US airports typically start with 'K' (ICAO)
+
+---
+
+### Step 2: Update Weather Location
+
+#### **Backend: weather_data.py** (Lines 9-10)
+Update latitude/longitude for weather data:
+```python
+class WeatherData:
+    def __init__(self):
+        self.lat = 41.9742   # Chicago O'Hare latitude
+        self.lon = -87.9073  # Chicago O'Hare longitude
+```
+
+**Finding Coordinates:**
+- Google Maps: Right-click airport → "What's here?"
+- [AirNav.com](https://www.airnav.com/) - Search airport code
+- [SkyVector](https://skyvector.com/) - Aviation charts with precise coordinates
+
+---
+
+### Step 3: Update Runway Configuration
+
+#### **Backend: prediction_engine.py** (Lines 25-26)
+Update runway headings for crosswind calculations:
+```python
+class PredictionEngine:
+    # Chicago O'Hare has multiple runways: 04L/22R, 04R/22L, 09L/27R, etc.
+    RUNWAY_HEADINGS = [40, 220, 90, 270, 100, 280, 140, 320]  # Primary runways
+```
+
+**Finding Runway Information:**
+1. Visit [AirNav.com](https://www.airnav.com/) and search your airport
+2. Look for "Runway" section with headings (e.g., "09/27" = headings 90° and 270°)
+3. Include all active runways, or just the primary ones for simplicity
+4. Convert runway numbers to degrees: Runway 09 = 090°, Runway 27 = 270°
+
+**Example Conversions:**
+- Runway 01/19 → `[10, 190]`
+- Runway 05/23 → `[50, 230]` (current KPUW configuration)
+- Runway 09L/27R → `[90, 270]`
+- Runway 13/31 → `[130, 310]`
+
+---
+
+### Step 4: Update Seasonal Baselines (Optional but Recommended)
+
+#### **Backend: prediction_engine.py** (Lines 31-32)
+Replace with your airport's historical cancellation rates:
+```python
+self.seasonal_baselines = {
+    1: 8.2, 2: 7.5, 3: 4.1, 4: 3.2, 5: 2.8, 6: 3.5,
+    7: 2.1, 8: 2.9, 9: 2.4, 10: 2.1, 11: 4.8, 12: 9.1
+}
+```
+
+**Getting Historical Data:**
+1. Visit [BTS On-Time Performance Data](https://www.transtats.bts.gov/ot_delay/OT_DelayCause1.asp?20=E)
+2. Filter by your airport code (IATA: ORD, SEA, etc.)
+3. Download 3-5 years of data
+4. Calculate cancellation rate per month: `(Cancelled / Total) * 100`
+5. Average across years for each month
+
+---
+
+### Step 5: Update Frontend Branding
+
+#### **Frontend: index.html** (Lines 1-10)
+Update title, meta descriptions, and branding:
+```html
+<title>Will I Fly ORD - Chicago O'Hare Flight Tracker</title>
+<meta name="description" content="Real-time flight cancellation predictions for Chicago O'Hare Airport (ORD)" />
+```
+
+#### **Frontend: App.jsx** (Line ~30)
+Update the header:
+```jsx
+<h1>
+  <Plane /> Will I Fly ORD
+</h1>
+```
+
+#### **Frontend: HowItWorksPage.jsx**
+Update methodology text to reference your airport:
+- Airport name mentions
+- Runway configurations
+- Regional weather patterns (e.g., lake effect snow for Chicago, fog for SFO)
+
+#### **Frontend: ResourcesPage.jsx**
+Update external resource links:
+- Airport website
+- Local weather services
+- Regional aviation resources
+
+---
+
+### Step 6: Update SEO and Metadata
+
+#### **Frontend: public/sitemap.xml**
+Change domain to your deployment URL:
+```xml
+<loc>https://yourdomain.com/</loc>
+```
+
+#### **Frontend: public/robots.txt**
+Update sitemap URL:
+```
+Sitemap: https://yourdomain.com/sitemap.xml
+```
+
+#### **Frontend: App.jsx** (Schema.org markup)
+Update structured data (search for "application/ld+json"):
+```json
+{
+  "@type": "Airport",
+  "name": "Chicago O'Hare International Airport",
+  "iataCode": "ORD",
+  "icaoCode": "KORD"
+}
+```
+
+---
+
+### Step 7: Initialize Database with Historical Data
+
+#### **Option A: Start Fresh**
+```bash
+# Backend will auto-create empty database
+cd backend
+uvicorn api:app --reload
+```
+
+System will begin collecting data immediately. Predictions will improve as history grows.
+
+#### **Option B: Import Historical Data (Recommended)**
+
+1. **Gather CSV data:**
+```csv
+flight_number,flight_date,is_cancelled,actual_visibility_m,actual_wind_speed_kmh,actual_temp_c,actual_snowfall_cm,actual_weather_code
+AA123,2024-01-15,false,16000,25,5,0,2
+AA456,2024-01-16,true,800,45,-2,5,71
+```
+
+2. **Import:**
+```bash
+cd backend
+python import_historical_data.py
+```
+
+3. **Import BTS data for your airport:**
+   - Download from [BTS](https://www.transtats.bts.gov/ot_delay/OT_DelayCause1.asp?20=E)
+   - Filter by your airport's IATA code
+   - Run: `python ingest_bts_data.py`
+
+---
+
+### Step 8: Test and Deploy
+
+#### **Local Testing:**
+```bash
+# Terminal 1: Start backend
+cd backend
+uvicorn api:app --reload
+
+# Terminal 2: Start frontend
+cd frontend
+npm run dev
+
+# Visit http://localhost:5173
+```
+
+**Verify:**
+- Flights are loading for your airport
+- Weather data is correct for your location
+- Risk scores are being calculated
+- No console errors
+
+#### **Deploy to Production:**
+```bash
+# Update fly.toml with your app name
+fly deploy
+
+# Set API keys
+fly secrets set RAPIDAPI_KEY=xxx AVIATIONSTACK_KEY=xxx
+```
+
+---
+
+### Step 9: Regional Customizations (Optional)
+
+#### **Add Region-Specific Weather Risks:**
+
+For airports with unique weather challenges, add custom risk factors:
+
+**Example: Add fog detection for San Francisco (SFO)**
+```python
+# In prediction_engine.py, around line 180
+if vis is not None and vis < 0.25 and temp is not None and temp < 60:
+    weather_score += 40
+    desc = "Dense Fog (Common at SFO)"
+    factors.append(desc)
+```
+
+**Example: Add thunderstorm season for Florida airports**
+```python
+# In prediction_engine.py, around line 105
+if dt and dt.month in [6, 7, 8, 9]:  # Hurricane/thunderstorm season
+    baseline += 5
+    desc = "Thunderstorm Season"
+    factors.append(desc)
+```
+
+**Example: Add lake effect snow for Great Lakes airports**
+```python
+# In prediction_engine.py, around line 176
+if temp is not None and temp < 32 and 'snow' in desc_text:
+    if dt and dt.month in [11, 12, 1, 2]:  # Lake effect season
+        weather_score += 15
+        desc = "Lake Effect Snow Risk"
+        factors.append(desc)
+```
+
+---
+
+### Summary Checklist
+
+- [ ] Update airport codes (ICAO/IATA) in `flight_data.py`
+- [ ] Update lat/lon in `weather_data.py`
+- [ ] Update runway headings in `prediction_engine.py`
+- [ ] Update seasonal baselines (or use defaults)
+- [ ] Update frontend branding (title, headers, text)
+- [ ] Update SEO metadata and structured data
+- [ ] Update sitemap and robots.txt with your domain
+- [ ] Import historical data (optional but recommended)
+- [ ] Test locally
+- [ ] Deploy to production
+- [ ] Add region-specific weather customizations (optional)
+
 
 
 ## 📜 License
