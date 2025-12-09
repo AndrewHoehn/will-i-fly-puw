@@ -25,6 +25,10 @@ A (near)real-time flight cancellation prediction system for Pullman-Moscow Regio
 
 **Visit the live application:** [https://williflypuw.com/](https://williflypuw.com/)
 
+## Screenshot
+<img width="2480" height="2152" alt="WillIFlyPuw_Screenshot" src="https://github.com/user-attachments/assets/784a0ace-cb1b-432b-8d8b-4e30415939c8" />
+
+
 ### Key Features in Action:
 - Real-time flight tracking with weather-based risk scores (0-100%)
 - Detailed risk breakdowns showing seasonal baselines, weather factors, and historical patterns
