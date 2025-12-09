@@ -152,7 +152,7 @@ Monthly cancellation rates based on 5 years of [BTS Data (2020-2025)](https://ww
 - **Wind Speed**: Total wind speed when direction unavailable
 
 ### 3. Historical Data Matching
-Queries similar conditions from 1,316+ historical flights:
+Queries similar conditions from historical flights in DB (AeroDataBox gives access too 180 days of historical flight data on its $5.35 USD/mo plan, so that's what I started out with)
 - Matches visibility ranges
 - Matches wind thresholds
 - Matches freezing temperature patterns
