@@ -735,7 +735,7 @@ class HistoryDatabase:
 
         Args:
             flight_number: Flight number (e.g., "AS 2132")
-            flight_date: Flight date string (ISO format)
+            flight_date: Flight date string (ISO format) or datetime object
 
         Returns:
             dict with keys 'puw', 'origin', 'dest' containing weather dicts,
@@ -744,8 +744,16 @@ class HistoryDatabase:
         conn = self._get_conn()
         cursor = conn.cursor()
 
-        # Extract just the date part (YYYY-MM-DD) for comparison
-        date_part = flight_date[:10] if len(flight_date) >= 10 else flight_date
+        # Convert datetime to string if needed, then extract date part (YYYY-MM-DD)
+        if hasattr(flight_date, 'strftime'):
+            # It's a datetime object
+            date_part = flight_date.strftime('%Y-%m-%d')
+        elif isinstance(flight_date, str):
+            # It's a string
+            date_part = flight_date[:10] if len(flight_date) >= 10 else flight_date
+        else:
+            # Unknown type, return None
+            return None
 
         cursor.execute("""
             SELECT
