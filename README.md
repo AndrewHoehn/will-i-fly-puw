@@ -177,6 +177,8 @@ Queries similar **multi-airport conditions** from historical flights in DB:
 
 This captures real-world scenarios like: "What happened when both PUW and Seattle had <1mi visibility?"
 
+**Note:** AeroDataBox gives access to 180 days of historical flight data on its $5.35 USD/mo plan, which provides the foundation for this historical matching.
+
 ### Risk Score Formula
 ```
 PUW_Score = visibility_penalty + crosswind_penalty + icing_penalty + wind_penalty
