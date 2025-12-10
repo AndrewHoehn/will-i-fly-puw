@@ -82,13 +82,13 @@ def sync_and_invalidate(full_sync=False):
 # Scheduler Setup
 scheduler = BackgroundScheduler()
 
-# Quick Sync every 30 minutes (Active Window: -4h to +8h)
-# Uses 1 API call per run -> ~48 calls/day
-scheduler.add_job(lambda: sync_and_invalidate(full_sync=False), 'interval', minutes=30)
+# Quick Sync every 45 minutes (Active Window: -4h to +8h)
+# Uses 1 API call per run -> ~32 calls/day
+scheduler.add_job(lambda: sync_and_invalidate(full_sync=False), 'interval', minutes=45)
 
-# Full Sync every 6 hours (Deep Refresh: -12h to +48h)
-# Uses ~4 API calls per run -> ~16 calls/day
-scheduler.add_job(lambda: sync_and_invalidate(full_sync=True), 'interval', hours=6)
+# Full Sync every 8 hours (Deep Refresh: -12h to +48h)
+# Uses 1 API call per run -> ~3 calls/day
+scheduler.add_job(lambda: sync_and_invalidate(full_sync=True), 'interval', hours=8)
 
 # Database Backup every 24 hours
 if os.getenv("BACKUP_ENABLED", "true").lower() == "true":
@@ -140,10 +140,12 @@ class FlightResponse(Flight):
     inbound_alert: Optional[str] = None
     risk_score: Optional[dict] = None # {score, factors, level}
     prediction_grade: Optional[str] = None # "Nailed It", "Miss", "Smooth", "False Alarm"
+    multi_airport_weather: Optional[dict] = None # {KPUW: {...}, KSEA: {...}, KBOI: {...}}
 
 class Stats(BaseModel):
     reliability_today: dict # { "cancelled": int, "total": int }
     reliability_yesterday: dict # { "cancelled": int, "total": int }
+    reliability_7_days: dict # { "rate": float, "cancelled": int, "total": int }
     reliability_30_days: dict # { "rate": float, "cancelled": int, "total": int }
     weather_risk_future: dict # { "at_risk": int, "total": int }
 
@@ -295,10 +297,66 @@ def process_flights():
         # Prediction Engine
         risk_obj = None
         prediction_grade = None # For Scorecard
-        
+        multi_airport_weather = None
+
         if local_dt > now_local:
-            # Future: Calculate Fresh Risk
-            risk_obj = pe.calculate_risk(f_out, w_cond)
+            # Future: Calculate Fresh Risk with Multi-Airport Weather
+            # Extract multi-airport weather from weather_map
+            puw_weather = w_cond if w_cond else {}
+            origin_weather = {}
+            dest_weather = {}
+
+            # Get weather from airports dict if available
+            if w_cond and 'airports' in w_cond:
+                airports_weather = w_cond['airports']
+                puw_weather = airports_weather.get('KPUW', w_cond)  # Fallback to w_cond for backward compat
+
+                # Get origin/destination weather
+                origin_code = f_out.get('origin')
+                dest_code = f_out.get('destination')
+
+                if origin_code and origin_code in airports_weather:
+                    origin_weather = airports_weather[origin_code]
+
+                if dest_code and dest_code in airports_weather:
+                    dest_weather = airports_weather[dest_code]
+
+            # Use multi-airport risk calculation
+            risk_obj = pe.calculate_risk_multi_airport(f_out, puw_weather, origin_weather, dest_weather)
+
+            # Build multi-airport weather dict for frontend
+            multi_airport_weather = {}
+            if puw_weather:
+                multi_airport_weather['KPUW'] = {
+                    'visibility_miles': puw_weather.get('visibility_miles'),
+                    'wind_speed_knots': puw_weather.get('wind_speed_knots'),
+                    'wind_direction': puw_weather.get('wind_direction'),
+                    'temperature_f': puw_weather.get('temperature_f'),
+                    'weather_code': puw_weather.get('weather_code'),
+                    'airport_name': 'Pullman-Moscow Regional'
+                }
+            if origin_weather and f_out.get('origin'):
+                origin_code = f_out['origin']
+                airport_name = {'KSEA': 'Seattle-Tacoma', 'KBOI': 'Boise'}.get(origin_code, origin_code)
+                multi_airport_weather[origin_code] = {
+                    'visibility_miles': origin_weather.get('visibility_miles'),
+                    'wind_speed_knots': origin_weather.get('wind_speed_knots'),
+                    'wind_direction': origin_weather.get('wind_direction'),
+                    'temperature_f': origin_weather.get('temperature_f'),
+                    'weather_code': origin_weather.get('weather_code'),
+                    'airport_name': airport_name
+                }
+            if dest_weather and f_out.get('destination'):
+                dest_code = f_out['destination']
+                airport_name = {'KSEA': 'Seattle-Tacoma', 'KBOI': 'Boise'}.get(dest_code, dest_code)
+                multi_airport_weather[dest_code] = {
+                    'visibility_miles': dest_weather.get('visibility_miles'),
+                    'wind_speed_knots': dest_weather.get('wind_speed_knots'),
+                    'wind_direction': dest_weather.get('wind_direction'),
+                    'temperature_f': dest_weather.get('temperature_f'),
+                    'weather_code': dest_weather.get('weather_code'),
+                    'airport_name': airport_name
+                }
         else:
             # Historical: Retrieve Logged Prediction
             # If not found, we could re-calculate, but that's "cheating".
@@ -308,17 +366,17 @@ def process_flights():
             if logged and logged.get('score') is not None:
                 # Reconstruct a partial risk object for display
                 risk_obj = RiskScore(logged['score'], [], logged['level'], breakdown={}, detailed_factors=[])
-                
+
                 # Grade the Prediction
                 # High Risk (>= 70) + Cancelled = Nailed It
                 # Low Risk (< 40) + Landed = Smooth Sailing
                 # High Risk + Landed = False Alarm
                 # Low Risk + Cancelled = Miss
-                
+
                 score = logged['score']
                 is_cancelled = effective_status in ['cancelled', 'canceled']
                 is_landed = effective_status in ['landed', 'arrived', 'departed']
-                
+
                 if is_cancelled:
                     if score >= 70: prediction_grade = "Nailed It"
                     elif score < 40: prediction_grade = "Miss"
@@ -327,13 +385,48 @@ def process_flights():
                     if score < 40: prediction_grade = "Smooth"
                     elif score >= 70: prediction_grade = "False Alarm"
                     else: prediction_grade = "Neutral"
-            
+
+            # Fetch multi-airport weather from historical database
+            historical_weather = fd.history_db.get_flight_multi_airport_weather(
+                f.get('number'),
+                f.get('scheduled_time')
+            )
+
+            if historical_weather:
+                # Build multi-airport weather dict for frontend
+                multi_airport_weather = {}
+
+                if 'KPUW' in historical_weather:
+                    multi_airport_weather['KPUW'] = {
+                        **historical_weather['KPUW'],
+                        'airport_name': 'Pullman-Moscow Regional'
+                    }
+
+                # Add origin airport if exists
+                origin_code = f.get('origin')
+                if origin_code and origin_code in historical_weather:
+                    airport_name = {'KSEA': 'Seattle-Tacoma', 'KBOI': 'Boise'}.get(origin_code, origin_code)
+                    multi_airport_weather[origin_code] = {
+                        **historical_weather[origin_code],
+                        'airport_name': airport_name
+                    }
+
+                # Add destination airport if exists
+                dest_code = f.get('destination')
+                if dest_code and dest_code in historical_weather:
+                    airport_name = {'KSEA': 'Seattle-Tacoma', 'KBOI': 'Boise'}.get(dest_code, dest_code)
+                    multi_airport_weather[dest_code] = {
+                        **historical_weather[dest_code],
+                        'airport_name': airport_name
+                    }
+
         resp_item = FlightResponse(
             **f_out,
             weather=w_info,
             inbound_alert=inbound_msg,
             risk_score=risk_obj.to_dict() if risk_obj else None,
-            prediction_grade=prediction_grade
+            prediction_grade=prediction_grade,
+            multi_airport_weather=multi_airport_weather
         )
 
         if local_dt <= now_local:
@@ -363,13 +456,15 @@ def process_flights():
     # Sort
     processed_historical.sort(key=lambda x: x.scheduled_time, reverse=True)
     processed_future.sort(key=lambda x: x.scheduled_time)
-    
-    # 30-Day Stats
+
+    # 7-Day and 30-Day Stats
+    stats_7 = fd.history_db.get_recent_stats(7)
     stats_30 = fd.history_db.get_recent_stats(30)
-    
+
     stats = Stats(
         reliability_today={"cancelled": today_cancelled, "total": today_total},
         reliability_yesterday={"cancelled": yesterday_cancelled, "total": yesterday_total},
+        reliability_7_days=stats_7,
         reliability_30_days=stats_30,
         weather_risk_future={"at_risk": future_risk, "total": future_total}
     )
@@ -394,6 +489,75 @@ def process_flights():
             })
             
     return processed_historical, processed_future, stats, forecast
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for monitoring services like UptimeRobot.
+    Returns 200 OK if all critical services are operational.
+    """
+    try:
+        checks = {}
+
+        # Check 1: Database is accessible
+        try:
+            stats = fd.history_db.get_recent_stats(1)
+            checks["database"] = "ok" if stats else "warning"
+        except Exception as e:
+            logger.error(f"Health check - database error: {e}")
+            checks["database"] = "error"
+
+        # Check 2: We have flight data
+        try:
+            flights = fd.get_flights()
+            checks["flights"] = "ok" if flights and len(flights) > 0 else "warning"
+        except Exception as e:
+            logger.error(f"Health check - flights error: {e}")
+            checks["flights"] = "error"
+
+        # Check 3: Weather API is accessible
+        try:
+            # Check if we've successfully fetched weather recently (within last hour)
+            if wd.last_weather_fetch:
+                time_since_fetch = datetime.now(timezone.utc) - wd.last_weather_fetch
+                if time_since_fetch < timedelta(hours=1):
+                    checks["weather"] = "ok"
+                else:
+                    checks["weather"] = "warning"
+            else:
+                checks["weather"] = "warning"
+        except Exception as e:
+            logger.error(f"Health check - weather error: {e}")
+            checks["weather"] = "warning"
+
+        # Overall status
+        has_errors = any(v == "error" for v in checks.values())
+        status = "degraded" if has_errors else "healthy"
+
+        response = {
+            "status": status,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "checks": checks
+        }
+
+        # Return 503 if any critical service has errors
+        if has_errors:
+            raise HTTPException(status_code=503, detail=response)
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": "unhealthy",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "error": str(e)
+            }
+        )
 
 @app.get("/api/dashboard", response_model=DashboardData)
 async def get_dashboard_data():
@@ -567,10 +731,15 @@ if os.path.exists(frontend_dist):
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     # API routes are already handled above.
-    # Serve index.html for any other route (SPA support)
     if full_path.startswith("api"):
         raise HTTPException(status_code=404, detail="API endpoint not found")
-        
+
+    # Try to serve static files first (favicon, sitemap, robots.txt, manifest, etc.)
+    static_file_path = os.path.join(frontend_dist, full_path)
+    if os.path.isfile(static_file_path):
+        return FileResponse(static_file_path)
+
+    # Otherwise serve index.html for SPA routing
     index_path = os.path.join(frontend_dist, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)

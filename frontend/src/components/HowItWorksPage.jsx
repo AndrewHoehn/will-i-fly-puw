@@ -37,33 +37,43 @@ export function HowItWorksPage({ historyRange }) {
 
           <div style={{ marginBottom: '20px' }}>
             <h4 style={{ margin: '0 0 8px 0', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-              2. Current Weather Conditions
+              2. Multi-Airport Weather Conditions
             </h4>
             <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-              We add risk points based on real-time weather at flight time. The main factors:
+              We analyze weather at <strong>three airports</strong>: Pullman (PUW), Seattle (SEA), and Boise (BOI). This captures conditions at your departure and arrival airports, not just PUW. For example, fog at Seattle can delay inbound flights even if Pullman weather is perfect.
+            </p>
+            <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
+              Weather scoring includes:
             </p>
             <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.8' }}>
-              <li><strong>Visibility</strong>: Critical if &lt;0.5mi (+40 points), Low if &lt;1mi (+25 points), Reduced if &lt;3mi (+10 points)</li>
-              <li><strong>Crosswinds</strong>: Calculated for runway 05/23 using wind direction and speed. Strong crosswinds (+15-25 points) make landing difficult for smaller regional jets</li>
-              <li><strong>Temperature + Precipitation</strong>: Freezing temps with precipitation (+15 points) create icing conditions</li>
-              <li><strong>High winds</strong>: Overall wind speed &gt;25 knots adds risk even without crosswind component</li>
+              <li><strong>Visibility</strong>: Critical if &lt;0.5mi (+60 points), Low if &lt;1mi (+40 points), Reduced if &lt;3mi (+15 points)</li>
+              <li><strong>Runway-Specific Crosswinds</strong>: Calculated for each airport's active runways (PUW: 05/23, SEA: 16L/34R, BOI: 10L/28R). Strong crosswinds (+30-50 points) make landing difficult</li>
+              <li><strong>Temperature + Precipitation</strong>: Freezing temps with precipitation (+25 points) create icing conditions</li>
+              <li><strong>High winds</strong>: Overall wind speed &gt;40 knots adds significant risk</li>
+              <li><strong>Origin/Destination Weighting</strong>: For arrivals, origin airport weather is weighted at 70%. For departures, destination airport weather is weighted at 60%</li>
             </ul>
             <div style={{ padding: '12px', background: 'rgba(100, 116, 139, 0.1)', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              weather_score = visibility_penalty + crosswind_penalty +<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;icing_penalty + wind_penalty
+              puw_score = visibility_penalty + crosswind_penalty +<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;icing_penalty + wind_penalty<br />
+              <br />
+              origin_score = (origin_weather_score × 0.7) // for arrivals<br />
+              dest_score = (dest_weather_score × 0.6) // for departures<br />
+              <br />
+              weather_score = puw_score + origin_score + dest_score
             </div>
           </div>
 
           <div style={{ marginBottom: '0' }}>
             <h4 style={{ margin: '0 0 8px 0', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-              3. Historical Pattern Matching
+              3. Multi-Airport Historical Pattern Matching
             </h4>
             <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-              We query our database of {historyRange?.total_flights || '1,300+'} past flights to find similar conditions (same visibility range, similar winds, same temperature conditions). If we find 20+ matching flights, we use their actual cancellation rate as an adjustment factor. This is the most valuable part - real outcomes under real conditions at PUW.
+              We query our database of {historyRange?.total_flights || '1,300+'} past flights to find similar <strong>multi-airport conditions</strong> - matching visibility, winds, and temperatures at PUW and the relevant origin/destination airport. If we find 5+ matching flights, we use their actual cancellation rate as an adjustment factor. This captures real-world outcomes when, for example, both PUW and Seattle had low visibility simultaneously.
             </p>
             <div style={{ padding: '12px', background: 'rgba(100, 116, 139, 0.1)', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
               historical_adjustment =<br />
-              &nbsp;&nbsp;actual_cancellation_rate(similar_conditions) - baseline
+              &nbsp;&nbsp;(actual_cancellation_rate(similar_multi_airport_conditions)<br />
+              &nbsp;&nbsp;&nbsp;+ current_calculated_score) / 2 - current_score
             </div>
           </div>
         </div>
@@ -105,9 +115,11 @@ export function HowItWorksPage({ historyRange }) {
           <div style={{ marginBottom: '16px' }}>
             <h4 style={{ margin: '0 0 8px 0', color: '#22c55e', fontSize: '0.95rem' }}>✓ What We Track</h4>
             <ul style={{ margin: 0, paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.8' }}>
-              <li>Real-time weather data from Open-Meteo API</li>
+              <li>Real-time weather data from Open-Meteo API at <strong>three airports</strong> (PUW, SEA, BOI)</li>
+              <li>10-day weather forecasts with hourly granularity for all three airports</li>
               <li>Flight schedules from AeroDataBox and AviationStack APIs</li>
               <li>Historical outcomes for {historyRange?.total_flights || '1,300+'} flights dating back to {historyRange?.start_date ? formatDate(historyRange.start_date) : 'mid-2024'}</li>
+              <li>Multi-airport weather patterns stored with each historical flight</li>
               <li>FAA status for connecting airports (Seattle, Boise)</li>
             </ul>
           </div>

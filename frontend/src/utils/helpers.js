@@ -74,3 +74,66 @@ export const formatChanceLevel = (score) => {
   if (score < 70) return { text: 'Watch Closely ⚠', class: 'medium' }
   return { text: 'High Chance ✗', class: 'high' }
 }
+
+export const formatMultiAirportWeather = (flight) => {
+  const { multi_airport_weather, type, origin, destination } = flight
+
+  if (!multi_airport_weather) {
+    return null // Fall back to single weather display
+  }
+
+  // Get PUW weather (always show)
+  const puwWeather = multi_airport_weather['KPUW']
+
+  // Get the other relevant airport based on flight type
+  const otherCode = type === 'arrival' ? origin : destination
+  const otherWeather = multi_airport_weather[otherCode]
+
+  // Helper to format compact weather
+  const formatCompact = (weather) => {
+    if (!weather) return '–'
+    const parts = []
+
+    // Temperature
+    if (weather.temperature_f != null) {
+      parts.push(`${Math.round(weather.temperature_f)}°`)
+    }
+
+    // Visibility (always show)
+    if (weather.visibility_miles != null) {
+      const vis = weather.visibility_miles
+      // Show more precision for low visibility
+      if (vis < 3) {
+        parts.push(`${vis.toFixed(1)}mi`)
+      } else {
+        parts.push(`${Math.round(vis)}mi`)
+      }
+    }
+
+    // Wind (always show)
+    if (weather.wind_speed_knots != null) {
+      parts.push(`${Math.round(weather.wind_speed_knots)}kn`)
+    }
+
+    return parts.length > 0 ? parts.join(' · ') : '✓'
+  }
+
+  // Helper to check if weather is concerning
+  const isConcerning = (weather) => {
+    if (!weather) return false
+    return (weather.visibility_miles && weather.visibility_miles < 3) ||
+           (weather.wind_speed_knots && weather.wind_speed_knots > 25)
+  }
+
+  const puwDisplay = formatCompact(puwWeather)
+  const puwConcerning = isConcerning(puwWeather)
+
+  const otherDisplay = formatCompact(otherWeather)
+  const otherConcerning = isConcerning(otherWeather)
+  const otherLabel = formatAirport(otherCode)
+
+  return {
+    puw: { display: puwDisplay, concerning: puwConcerning },
+    other: { display: otherDisplay, concerning: otherConcerning, label: otherLabel }
+  }
+}

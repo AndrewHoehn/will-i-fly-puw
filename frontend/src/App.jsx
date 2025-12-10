@@ -3,7 +3,8 @@ import axios from 'axios'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Plane,
-
+  Menu,
+  X,
   AlertTriangle,
   Wind,
   CloudRain,
@@ -22,7 +23,7 @@ import './App.css'
 import { HowItWorksPage } from './components/HowItWorksPage'
 import { ResourcesPage } from './components/ResourcesPage'
 import { MonthlyStatsPage } from './components/MonthlyStatsPage'
-import { formatWeatherPlain, formatAirportFull, formatChanceLevel } from './utils/helpers'
+import { formatWeatherPlain, formatAirportFull, formatChanceLevel, formatMultiAirportWeather } from './utils/helpers'
 
 const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:8000/api')
 
@@ -35,6 +36,7 @@ function App() {
   const [filterDirection, setFilterDirection] = useState('all') // all, arrival, departure
   const [filterAirport, setFilterAirport] = useState('all') // all, SEA, BOI
   const [selectedRiskFlight, setSelectedRiskFlight] = useState(null)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
 
   // Handle URL hash-based routing for deep linking
   useEffect(() => {
@@ -57,9 +59,10 @@ function App() {
   const navigateToView = (view) => {
     setActiveView(view)
     window.location.hash = view
+    setMobileMenuOpen(false) // Close mobile menu on navigation
   }
 
-  // Update document title based on active view
+  // Update document title and track pageview based on active view
   useEffect(() => {
     const titles = {
       'flights': 'Will I Fly PUW - Pullman Flight Tracker & Cancellation Predictions',
@@ -67,7 +70,17 @@ function App() {
       'how-it-works': 'How It Works - Pullman Airport Weather Prediction System',
       'resources': 'Resources - Pullman Moscow Regional Airport Flight Information'
     }
-    document.title = titles[activeView] || titles['flights']
+    const newTitle = titles[activeView] || titles['flights']
+    document.title = newTitle
+
+    // Track virtual pageview in Google Tag Manager
+    if (window.dataLayer) {
+      window.dataLayer.push({
+        'event': 'virtualPageview',
+        'pageUrl': `/${activeView}`,
+        'pageTitle': newTitle
+      })
+    }
   }, [activeView])
 
   const fetchData = async () => {
@@ -135,12 +148,18 @@ function App() {
             <Plane /> Will I Fly PUW
           </h1>
         </div>
-
+        <button
+          className="mobile-menu-toggle"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          aria-label="Toggle menu"
+        >
+          {mobileMenuOpen ? <X size={24} /> : <Menu size={24} />}
+        </button>
       </header>
 
       <div className="app-content">
         {/* Main Navigation Tabs */}
-        <nav className="nav-tabs">
+        <nav className={`nav-tabs ${mobileMenuOpen ? 'mobile-open' : ''}`}>
           <button
             className={`nav-tab ${activeView === 'flights' ? 'active' : ''}`}
             onClick={() => navigateToView('flights')}
@@ -325,6 +344,45 @@ function App() {
           </>
         )}
       </div>
+
+      {/* Footer */}
+      <footer style={{
+        marginTop: '48px',
+        padding: '24px 16px',
+        borderTop: '1px solid var(--border-default)',
+        textAlign: 'center',
+        color: 'var(--text-secondary)',
+        fontSize: '0.9rem'
+      }}>
+        <div style={{ marginBottom: '12px' }}>
+          <a
+            href="mailto:info@williflypuw.com"
+            style={{
+              color: 'var(--blue)',
+              textDecoration: 'none',
+              fontWeight: 500
+            }}
+          >
+            info@williflypuw.com
+          </a>
+        </div>
+        <div style={{ fontSize: '0.85rem' }}>
+          <a
+            href="https://github.com/AndrewHoehn/will-i-fly-puw"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              color: 'var(--text-secondary)',
+              textDecoration: 'none',
+              marginRight: '16px'
+            }}
+          >
+            GitHub
+          </a>
+          <span style={{ marginRight: '16px' }}>•</span>
+          <span>Made with data from BTS, AviationStack & FlightAware</span>
+        </div>
+      </footer>
     </div>
   )
 }
@@ -359,12 +417,19 @@ const formatAirport = (code) => {
 }
 
 const SummaryStats = ({ stats }) => {
-  const { reliability_today, reliability_30_days, weather_risk_future } = stats
+  const { reliability_today, reliability_7_days, reliability_30_days, weather_risk_future } = stats
 
   // Reliability Color (Today)
   const cancelled = reliability_today.cancelled
   const relColor = cancelled > 0 ? 'var(--status-red)' : 'var(--status-green)'
   const relBg = cancelled > 0 ? 'rgba(239, 68, 68, 0.1)' : 'rgba(34, 197, 94, 0.1)'
+
+  // 7-Day Stats
+  const cancelled7 = reliability_7_days.cancelled
+  const total7 = reliability_7_days.total
+  const rate7 = reliability_7_days.rate
+  const rate7Color = rate7 > 10 ? 'var(--status-red)' : (rate7 > 5 ? 'var(--status-orange)' : 'var(--status-green)')
+  const rate7Bg = rate7 > 10 ? 'rgba(239, 68, 68, 0.1)' : (rate7 > 5 ? 'rgba(249, 115, 22, 0.1)' : 'rgba(34, 197, 94, 0.1)')
 
   // 30-Day Rate Color
   const rate = reliability_30_days.rate
@@ -382,6 +447,14 @@ const SummaryStats = ({ stats }) => {
         <div className="stat-title">Today</div>
         <div className="stat-value" style={{ color: relColor }}>
           {cancelled} / {reliability_today.total}
+        </div>
+        <div className="stat-desc">Cancelled</div>
+      </div>
+
+      <div className="stat-card" style={{ borderColor: rate7Color, background: rate7Bg }}>
+        <div className="stat-title">Last 7 Days</div>
+        <div className="stat-value" style={{ color: rate7Color }}>
+          {cancelled7} / {total7}
         </div>
         <div className="stat-desc">Cancelled</div>
       </div>
@@ -506,7 +579,7 @@ const FlightTable = ({ flights, isFuture, onRiskClick }) => {
                   <th>Aircraft</th>
                   <th>Status</th>
                   <th>Weather</th>
-                  <th>Chance</th>
+                  <th>Cancel Chance</th>
                   <th>Prediction</th>
                   {!isFuture && <th>Accuracy</th>}
                 </tr>
@@ -622,13 +695,52 @@ const FlightRow = ({ flight, isFuture, onRiskClick }) => {
 
       {/* Weather */}
       <td className="weather-cell">
-        {flight.weather ? (
-          <div className="weather-summary">
-            {formatWeatherPlain(flight.weather)}
-          </div>
-        ) : (
-          <span style={{ color: '#64748b' }}>--</span>
-        )}
+        {(() => {
+          const multiWeather = formatMultiAirportWeather(flight)
+
+          if (multiWeather) {
+            // Multi-airport weather display
+            return (
+              <div style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px',
+                fontSize: '0.85rem',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontWeight: 500, color: 'var(--text-secondary)', width: '35px', textAlign: 'left' }}>PUW</span>
+                  <span style={{
+                    color: multiWeather.puw.concerning ? '#ef4444' : 'var(--text-primary)',
+                    fontWeight: multiWeather.puw.concerning ? 600 : 400
+                  }}>
+                    {multiWeather.puw.display}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontWeight: 500, color: 'var(--text-secondary)', width: '35px', textAlign: 'left' }}>
+                    {multiWeather.other.label}
+                  </span>
+                  <span style={{
+                    color: multiWeather.other.concerning ? '#ef4444' : 'var(--text-primary)',
+                    fontWeight: multiWeather.other.concerning ? 600 : 400
+                  }}>
+                    {multiWeather.other.display}
+                  </span>
+                </div>
+              </div>
+            )
+          } else if (flight.weather) {
+            // Fallback to single airport weather
+            return (
+              <div className="weather-summary">
+                {formatWeatherPlain(flight.weather)}
+              </div>
+            )
+          } else {
+            return <span style={{ color: '#64748b' }}>--</span>
+          }
+        })()}
       </td>
 
       {/* Cancellation Chance % */}
@@ -765,11 +877,51 @@ const FlightCard = ({ flight, isFuture, onRiskClick }) => {
           </div>
         )}
 
-        {flight.weather && (
-          <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
-            {formatWeatherPlain(flight.weather)}
-          </div>
-        )}
+        {(() => {
+          const multiWeather = formatMultiAirportWeather(flight)
+
+          if (multiWeather) {
+            // Multi-airport weather display
+            return (
+              <div style={{
+                fontSize: '0.85rem',
+                marginTop: '4px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '2px',
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontWeight: 500, color: 'var(--text-secondary)', width: '35px', textAlign: 'left' }}>PUW</span>
+                  <span style={{
+                    color: multiWeather.puw.concerning ? '#ef4444' : 'var(--text-secondary)',
+                    fontWeight: multiWeather.puw.concerning ? 600 : 400
+                  }}>
+                    {multiWeather.puw.display}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontWeight: 500, color: 'var(--text-secondary)', width: '35px', textAlign: 'left' }}>
+                    {multiWeather.other.label}
+                  </span>
+                  <span style={{
+                    color: multiWeather.other.concerning ? '#ef4444' : 'var(--text-secondary)',
+                    fontWeight: multiWeather.other.concerning ? 600 : 400
+                  }}>
+                    {multiWeather.other.display}
+                  </span>
+                </div>
+              </div>
+            )
+          } else if (flight.weather) {
+            return (
+              <div style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                {formatWeatherPlain(flight.weather)}
+              </div>
+            )
+          }
+          return null
+        })()}
         {/* Cancellation Chance */}
         {flight.risk_score && (
           <div
@@ -884,7 +1036,7 @@ const Scorecard = ({ flights }) => {
 }
 
 const RiskDetailsModal = ({ flight, onClose }) => {
-  const { risk_score } = flight
+  const { risk_score, multi_airport_weather } = flight
   if (!risk_score) return null
 
   const breakdown = risk_score.breakdown || {
@@ -895,6 +1047,23 @@ const RiskDetailsModal = ({ flight, onClose }) => {
   }
 
   const detailedFactors = risk_score.detailed_factors || []
+
+  // Helper to format weather description
+  const formatWeather = (weather) => {
+    if (!weather) return 'No data'
+    const parts = []
+    if (weather.temperature_f) parts.push(`${Math.round(weather.temperature_f)}°F`)
+    if (weather.visibility_miles) parts.push(`Vis: ${weather.visibility_miles.toFixed(1)}mi`)
+    if (weather.wind_speed_knots) parts.push(`Wind: ${Math.round(weather.wind_speed_knots)}kn`)
+    return parts.length > 0 ? parts.join(', ') : 'No data'
+  }
+
+  // Helper to determine if weather is concerning
+  const isWeatherConcerning = (weather) => {
+    if (!weather) return false
+    return (weather.visibility_miles && weather.visibility_miles < 3) ||
+           (weather.wind_speed_knots && weather.wind_speed_knots > 25)
+  }
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -913,15 +1082,70 @@ const RiskDetailsModal = ({ flight, onClose }) => {
             {formatChanceLevel(risk_score.score).text}
           </div>
 
+          {/* Multi-Airport Weather Display */}
+          {multi_airport_weather && Object.keys(multi_airport_weather).length > 0 && (
+            <div style={{ marginBottom: '24px' }}>
+              <h3 style={{ fontSize: '1rem', marginBottom: '12px', color: 'var(--text-primary)' }}>Weather Conditions</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {Object.entries(multi_airport_weather).map(([code, weather]) => {
+                  const isConcerning = isWeatherConcerning(weather)
+                  return (
+                    <div key={code} style={{
+                      padding: '12px',
+                      borderRadius: '8px',
+                      backgroundColor: isConcerning ? 'rgba(239, 68, 68, 0.1)' : 'var(--bg-secondary)',
+                      border: isConcerning ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid var(--border-default)',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center'
+                    }}>
+                      <div>
+                        <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                          {code} {weather.airport_name && `(${weather.airport_name})`}
+                        </div>
+                        <div style={{ fontSize: '0.9rem', color: 'var(--text-secondary)' }}>
+                          {formatWeather(weather)}
+                        </div>
+                      </div>
+                      {isConcerning && (
+                        <span style={{ color: '#ef4444', fontSize: '1.2rem' }}>⚠️</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="breakdown-table">
             <div className="breakdown-row">
               <span>Seasonal Baseline</span>
               <span>+{breakdown.seasonal_baseline}%</span>
             </div>
-            <div className="breakdown-row">
-              <span>Weather Factors</span>
-              <span>+{breakdown.weather_score}%</span>
-            </div>
+            {breakdown.puw_weather_score !== undefined && breakdown.puw_weather_score !== 0 && (
+              <div className="breakdown-row">
+                <span>PUW Weather</span>
+                <span>+{breakdown.puw_weather_score}%</span>
+              </div>
+            )}
+            {breakdown.origin_weather_score !== undefined && breakdown.origin_weather_score !== 0 && (
+              <div className="breakdown-row">
+                <span>Origin Weather ({flight.origin})</span>
+                <span>+{breakdown.origin_weather_score.toFixed(1)}%</span>
+              </div>
+            )}
+            {breakdown.dest_weather_score !== undefined && breakdown.dest_weather_score !== 0 && (
+              <div className="breakdown-row">
+                <span>Destination Weather ({flight.destination})</span>
+                <span>+{breakdown.dest_weather_score.toFixed(1)}%</span>
+              </div>
+            )}
+            {breakdown.weather_score !== undefined && breakdown.weather_score !== 0 && (
+              <div className="breakdown-row">
+                <span>Weather Factors</span>
+                <span>+{breakdown.weather_score}%</span>
+              </div>
+            )}
             {breakdown.history_adjustment !== 0 && (
               <div className="breakdown-row highlight">
                 <span>Historical Adjustment</span>

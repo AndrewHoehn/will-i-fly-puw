@@ -1,4 +1,4 @@
-import { Camera, Plane, ExternalLink, MapPin } from 'lucide-react'
+import { Camera, Plane, ExternalLink, MapPin, Mail } from 'lucide-react'
 
 export function ResourcesPage() {
   return (
@@ -205,21 +205,60 @@ export function ResourcesPage() {
               <strong>Sign up for flight alerts</strong>: Alaska Airlines text/email notifications will tell you about delays or cancellations before you leave for the airport
             </li>
             <li style={{ marginBottom: '12px' }}>
-              <strong>December-February are the tricky months</strong>: Low visibility and crosswinds cause most cancellations. Check the webcam before leaving home.
+              <strong>December-February are the tricky months</strong>: Low visibility and crosswinds cause most cancellations.
             </li>
             <li style={{ marginBottom: '12px' }}>
               <strong>Have a Plan B</strong>: Keep Spokane (GEG) as a backup option for critical trips. Book flexible tickets if possible.
             </li>
             <li style={{ marginBottom: '12px' }}>
-              <strong>Arrive early during winter</strong>: Not because of security, but because weather can change quickly in the Palouse. Give yourself buffer time.
-            </li>
-            <li style={{ marginBottom: '12px' }}>
               <strong>Know your rebooking options</strong>: If your flight cancels, Alaska Airlines can often rebook you through Spokane same-day
             </li>
-            <li style={{ marginBottom: 0 }}>
-              <strong>Consider trip insurance</strong>: For important winter travel (holidays, business trips), travel insurance can cover hotel costs if you get stuck
-            </li>
           </ul>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginTop: '16px' }}>
+        <div className="card-header">Questions or Feedback?</div>
+        <div className="card-body">
+          <p style={{ margin: '0 0 16px 0', fontSize: '0.9rem', lineHeight: '1.6', color: 'var(--text-secondary)' }}>
+            Have suggestions for improving the tracker? Found an issue? Want to report prediction accuracy? We'd love to hear from you.
+          </p>
+          <a
+            href="mailto:info@williflypuw.com"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 18px',
+              background: 'var(--blue)',
+              color: 'white',
+              borderRadius: '6px',
+              textDecoration: 'none',
+              fontSize: '0.95rem',
+              fontWeight: 500,
+              transition: 'all 0.15s ease'
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = '#2563eb'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--blue)'
+            }}
+          >
+            <Mail size={18} />
+            <span>info@williflypuw.com</span>
+          </a>
+          <div style={{ marginTop: '12px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+            Or contribute on{' '}
+            <a
+              href="https://github.com/AndrewHoehn/will-i-fly-puw"
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: 'var(--blue)', textDecoration: 'none' }}
+            >
+              GitHub
+            </a>
+          </div>
         </div>
       </div>
     </div>

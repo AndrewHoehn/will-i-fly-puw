@@ -521,3 +521,290 @@ class HistoryDatabase:
                 "total_flights": 0,
                 "days_covered": 0
             }
+
+    # ===== MULTI-AIRPORT WEATHER METHODS =====
+
+    def add_flight_multi_weather(self, data):
+        """
+        Add flight with multi-airport weather data.
+
+        Args:
+            data: dict with keys:
+                - flight_number: str
+                - flight_date: str
+                - is_cancelled: bool
+                - origin_airport: str (ICAO code)
+                - dest_airport: str (ICAO code)
+                - puw_weather: dict {visibility_miles, wind_speed_knots, wind_direction, temp_f, weather_code}
+                - origin_weather: dict (same structure)
+                - dest_weather: dict (same structure)
+        """
+        check_sql = "SELECT id FROM historical_flights WHERE flight_number = ? AND flight_date = ?"
+        insert_sql = """
+        INSERT INTO historical_flights (
+            flight_number, flight_date, is_cancelled,
+            origin_airport, dest_airport,
+            puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction, puw_temp_f, puw_weather_code,
+            origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
+            dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
+            visibility_miles, wind_speed_knots, temp_f, weather_code
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+        try:
+            with self._get_conn() as conn:
+                # Check for duplicates
+                cursor = conn.execute(check_sql, (data.get('flight_number'), data.get('flight_date')))
+                if cursor.fetchone():
+                    logger.debug(f"Flight {data.get('flight_number')} on {data.get('flight_date')} already exists")
+                    return
+
+                # Extract weather data
+                puw_weather = data.get('puw_weather', {})
+                origin_weather = data.get('origin_weather', {})
+                dest_weather = data.get('dest_weather', {})
+
+                # Insert with all airport weather
+                conn.execute(insert_sql, (
+                    data.get('flight_number'),
+                    data.get('flight_date'),
+                    1 if data.get('is_cancelled') else 0,
+                    data.get('origin_airport'),
+                    data.get('dest_airport'),
+                    # PUW weather
+                    puw_weather.get('visibility_miles'),
+                    puw_weather.get('wind_speed_knots'),
+                    puw_weather.get('wind_direction'),
+                    puw_weather.get('temp_f'),
+                    puw_weather.get('weather_code'),
+                    # Origin weather
+                    origin_weather.get('visibility_miles'),
+                    origin_weather.get('wind_speed_knots'),
+                    origin_weather.get('wind_direction'),
+                    origin_weather.get('temp_f'),
+                    origin_weather.get('weather_code'),
+                    # Dest weather
+                    dest_weather.get('visibility_miles'),
+                    dest_weather.get('wind_speed_knots'),
+                    dest_weather.get('wind_direction'),
+                    dest_weather.get('temp_f'),
+                    dest_weather.get('weather_code'),
+                    # Legacy columns (use PUW data for backward compatibility)
+                    puw_weather.get('visibility_miles'),
+                    puw_weather.get('wind_speed_knots'),
+                    puw_weather.get('temp_f'),
+                    puw_weather.get('weather_code')
+                ))
+                logger.info(f"Added flight {data.get('flight_number')} with multi-airport weather")
+        except Exception as e:
+            logger.error(f"Failed to insert multi-airport flight: {e}", exc_info=True)
+
+    def find_similar_flights_multi_airport(self, puw_weather=None, origin_weather=None, dest_weather=None, flight_type=None):
+        """
+        Find flights with similar weather conditions across multiple airports.
+        More sophisticated matching that considers origin/destination weather.
+
+        Args:
+            puw_weather: dict with visibility_miles, wind_speed_knots, temp_f
+            origin_weather: dict (same structure)
+            dest_weather: dict (same structure)
+            flight_type: "arrival" or "departure" (affects which airports are weighted)
+
+        Returns:
+            (total_count, cancelled_count)
+        """
+        sql = "SELECT count(*), sum(is_cancelled) FROM historical_flights WHERE 1=1"
+        params = []
+
+        # For arrivals, origin weather matters more
+        # For departures, destination weather matters more
+
+        if flight_type == "arrival" and origin_weather:
+            # Check origin visibility
+            vis = origin_weather.get('visibility_miles')
+            if vis is not None and vis < 3.0:
+                sql += " AND origin_visibility_miles <= ?"
+                params.append(vis + 0.5)
+
+            # Check origin wind
+            wind = origin_weather.get('wind_speed_knots')
+            if wind is not None and wind > 20:
+                sql += " AND origin_wind_speed_knots >= ?"
+                params.append(wind - 5)
+
+        elif flight_type == "departure" and dest_weather:
+            # Check destination visibility
+            vis = dest_weather.get('visibility_miles')
+            if vis is not None and vis < 3.0:
+                sql += " AND dest_visibility_miles <= ?"
+                params.append(vis + 0.5)
+
+            # Check destination wind
+            wind = dest_weather.get('wind_speed_knots')
+            if wind is not None and wind > 20:
+                sql += " AND dest_wind_speed_knots >= ?"
+                params.append(wind - 5)
+
+        # Always check PUW weather for local conditions
+        if puw_weather:
+            vis = puw_weather.get('visibility_miles')
+            if vis is not None and vis < 3.0:
+                sql += " AND puw_visibility_miles <= ?"
+                params.append(vis + 0.5)
+
+            wind = puw_weather.get('wind_speed_knots')
+            if wind is not None and wind > 20:
+                sql += " AND puw_wind_speed_knots >= ?"
+                params.append(wind - 5)
+
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.execute(sql, params)
+                row = cursor.fetchone()
+                if row:
+                    total = row[0] or 0
+                    cancelled = row[1] or 0
+                    return total, cancelled
+        except Exception as e:
+            logger.error(f"Multi-airport query failed: {e}")
+
+        return 0, 0
+
+    def store_active_flight_with_prediction_multi(self, flight_data, risk_score, puw_weather, origin_weather, dest_weather):
+        """
+        Store active flight with multi-airport prediction in history_log.
+
+        Args:
+            flight_data: flight dict
+            risk_score: RiskScore object
+            puw_weather: dict
+            origin_weather: dict
+            dest_weather: dict
+        """
+        insert_sql = """
+        INSERT OR REPLACE INTO history_log (
+            flight_id, number, scheduled_time, actual_time, status,
+            predicted_risk, predicted_level,
+            puw_weather_visibility, puw_weather_wind, puw_weather_temp, puw_weather_code,
+            origin_weather_visibility, origin_weather_wind, origin_weather_temp, origin_weather_code,
+            dest_weather_visibility, dest_weather_wind, dest_weather_temp, dest_weather_code,
+            weather_visibility, weather_wind, weather_temp, weather_code,
+            timestamp
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+        try:
+            from datetime import datetime, timezone
+            with self._get_conn() as conn:
+                conn.execute(insert_sql, (
+                    flight_data.get('id'),
+                    flight_data.get('number'),
+                    flight_data.get('scheduled_time'),
+                    flight_data.get('actual_time'),
+                    flight_data.get('status'),
+                    risk_score.score if risk_score else None,
+                    risk_score.risk_level if risk_score else None,
+                    # PUW weather
+                    puw_weather.get('visibility_miles') if puw_weather else None,
+                    puw_weather.get('wind_speed_knots') if puw_weather else None,
+                    puw_weather.get('temp_f') if puw_weather else None,
+                    puw_weather.get('weather_code') if puw_weather else None,
+                    # Origin weather
+                    origin_weather.get('visibility_miles') if origin_weather else None,
+                    origin_weather.get('wind_speed_knots') if origin_weather else None,
+                    origin_weather.get('temp_f') if origin_weather else None,
+                    origin_weather.get('weather_code') if origin_weather else None,
+                    # Dest weather
+                    dest_weather.get('visibility_miles') if dest_weather else None,
+                    dest_weather.get('wind_speed_knots') if dest_weather else None,
+                    dest_weather.get('temp_f') if dest_weather else None,
+                    dest_weather.get('weather_code') if dest_weather else None,
+                    # Legacy columns (use PUW)
+                    puw_weather.get('visibility_miles') if puw_weather else None,
+                    puw_weather.get('wind_speed_knots') if puw_weather else None,
+                    puw_weather.get('temp_f') if puw_weather else None,
+                    puw_weather.get('weather_code') if puw_weather else None,
+                    datetime.now(timezone.utc).isoformat()
+                ))
+        except Exception as e:
+            logger.error(f"Failed to store multi-airport prediction: {e}", exc_info=True)
+
+    def get_flight_multi_airport_weather(self, flight_number, flight_date):
+        """
+        Retrieve multi-airport weather data for a specific historical flight.
+
+        Args:
+            flight_number: Flight number (e.g., "AS 2132")
+            flight_date: Flight date string (ISO format)
+
+        Returns:
+            dict with keys 'puw', 'origin', 'dest' containing weather dicts,
+            or None if no multi-airport data found
+        """
+        conn = self._get_conn()
+        cursor = conn.cursor()
+
+        # Extract just the date part (YYYY-MM-DD) for comparison
+        date_part = flight_date[:10] if len(flight_date) >= 10 else flight_date
+
+        cursor.execute("""
+            SELECT
+                puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction, puw_temp_f, puw_weather_code,
+                origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
+                dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
+                origin_airport, dest_airport
+            FROM historical_flights
+            WHERE flight_number = ? AND substr(flight_date, 1, 10) = ?
+            LIMIT 1
+        """, (flight_number, date_part))
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        # Unpack row
+        (puw_vis, puw_wind, puw_wind_dir, puw_temp, puw_code,
+         origin_vis, origin_wind, origin_wind_dir, origin_temp, origin_code,
+         dest_vis, dest_wind, dest_wind_dir, dest_temp, dest_code,
+         origin_airport, dest_airport) = row
+
+        # Check if we have any multi-airport data
+        has_puw = puw_vis is not None
+        has_origin = origin_vis is not None
+        has_dest = dest_vis is not None
+
+        if not (has_puw or has_origin or has_dest):
+            return None
+
+        result = {}
+
+        if has_puw:
+            result['KPUW'] = {
+                'visibility_miles': puw_vis,
+                'wind_speed_knots': puw_wind,
+                'wind_direction': puw_wind_dir,
+                'temperature_f': puw_temp,
+                'weather_code': puw_code
+            }
+
+        if has_origin and origin_airport:
+            result[origin_airport] = {
+                'visibility_miles': origin_vis,
+                'wind_speed_knots': origin_wind,
+                'wind_direction': origin_wind_dir,
+                'temperature_f': origin_temp,
+                'weather_code': origin_code
+            }
+
+        if has_dest and dest_airport:
+            result[dest_airport] = {
+                'visibility_miles': dest_vis,
+                'wind_speed_knots': dest_wind,
+                'wind_direction': dest_wind_dir,
+                'temperature_f': dest_temp,
+                'weather_code': dest_code
+            }
+
+        return result if result else None

@@ -1,6 +1,6 @@
 # ✈️ Will I Fly PUW
 
-A real-time flight cancellation prediction system for Pullman-Moscow Regional Airport (KPUW). Get accurate cancellation risk scores based on weather conditions, historical data, and seasonal trends before your flight.
+A (near)real-time flight cancellation prediction system for Pullman-Moscow Regional Airport (KPUW). Get (possibly semi-)accurate cancellation risk scores based on weather conditions, historical data, and seasonal trends before your flight.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-blue.svg)
@@ -9,21 +9,27 @@ A real-time flight cancellation prediction system for Pullman-Moscow Regional Ai
 ## 🌟 Features
 
 - **Real-time Flight Tracking** - Monitor flights to/from Seattle (SEA) and Boise (BOI)
-- **Cancellation Risk Predictions** - ML-powered risk scores (0-100%) with detailed breakdowns
+- **Multi-Airport Weather Analysis** - Fetches and analyzes weather from PUW, SEA, and BOI simultaneously
+- **Cancellation Risk Predictions** - Pattern-matching risk scores (0-100%) with detailed breakdowns
 - **Smart Data Backfill** - Automatically detects and fills data gaps (e.g., after downtime)
 - **Retroactive Predictions** - Generates risk scores for backfilled flights to ensure complete history
 - **Data Transparency** - Live tracker of historical data depth (e.g., "184 Days of History")
-- **Historical Analysis** - 1,300+ flight records spanning multiple months
+- **Historical Analysis** - 1,300+ flight records with multi-airport weather patterns
 - **Seasonal Baselines** - Calibrated using 5 years of BTS data (2020-2025)
 - **Monthly Statistics** - Aggregated cancellation rates and weather trends by month
-- **Weather Integration** - Live weather data with plain-English summaries
-- **Crosswind Calculations** - Runway-specific crosswind component analysis
+- **Weather Integration** - Live 10-day forecasts with hourly granularity for all three airports
+- **Runway-Specific Crosswind Calculations** - Calculated for PUW (05/23), SEA (16L/34R), and BOI (10L/28R)
+- **Origin/Destination Weather Weighting** - Prioritizes weather at departure/arrival airports based on flight type
 - **Prediction Accuracy Tracking** - Real-time validation of prediction performance
 - **Sticky Header** - Always-visible navigation and data freshness indicator
 
 ## 🌐 Live Demo
 
-**Visit the live application:** [https://kpuw-tracker.fly.dev/](https://kpuw-tracker.fly.dev/)
+**Visit the live application:** [https://williflypuw.com/](https://williflypuw.com/)
+
+## Screenshot
+<img width="2480" height="2152" alt="WillIFlyPuw_Screenshot" src="https://github.com/user-attachments/assets/784a0ace-cb1b-432b-8d8b-4e30415939c8" />
+
 
 ### Key Features in Action:
 - Real-time flight tracking with weather-based risk scores (0-100%)
@@ -45,7 +51,7 @@ A real-time flight cancellation prediction system for Pullman-Moscow Regional Ai
 
 1. **Clone the repository**
 ```bash
-git clone https://github.com/yourusername/will-i-fly-puw.git
+git clone https://github.com/andrewhoehn/will-i-fly-puw.git
 cd will-i-fly-puw
 ```
 
@@ -132,7 +138,7 @@ frontend/src/
 
 ## 🧠 Prediction Engine
 
-The risk calculation combines multiple factors:
+The risk calculation combines multiple factors across **three airports** (PUW, SEA, BOI):
 
 ### 1. Seasonal Baseline
 Monthly cancellation rates based on 5 years of [BTS Data (2020-2025)](https://www.transtats.bts.gov/ot_delay/OT_DelayCause1.asp?20=E):
@@ -141,25 +147,51 @@ Monthly cancellation rates based on 5 years of [BTS Data (2020-2025)](https://ww
 - **Summer** (Jun-Aug): <1% baseline
 - **Fall** (Sep-Nov): 0-2% baseline
 
-### 2. Weather Factors
-- **Visibility**: Critical (<0.5mi), Low (<1mi), Reduced (<3mi)
-- **Crosswind Component**: Calculated using runway 05/23 headings (050°/230°)
-- **Temperature**: Icing conditions when <32°F with precipitation
-- **Wind Speed**: Total wind speed when direction unavailable
+### 2. Multi-Airport Weather Analysis
+The system fetches weather from three airports in parallel and scores each independently:
 
-### 3. Historical Data Matching
-Queries similar conditions from 1,316+ historical flights:
-- Matches visibility ranges
-- Matches wind thresholds
-- Matches freezing temperature patterns
-- Returns actual cancellation rates for similar conditions
+**Weather Factors per Airport:**
+- **Visibility**: Critical (<0.5mi = +60 pts), Low (<1mi = +40 pts), Reduced (<3mi = +15 pts)
+- **Runway-Specific Crosswinds**:
+  - PUW: Runway 05/23 (050°/230°)
+  - SEA: Runways 16L/34R, 16C/34C (160°/340°, 170°/350°)
+  - BOI: Runways 10L/28R, 10R/28L (100°/280°, 120°/300°)
+  - Strong crosswinds: +30-50 pts based on severity
+- **Temperature**: Icing conditions when <32°F with precipitation (+25 pts)
+- **Wind Speed**: Total wind speed >40 knots adds significant risk
+
+**Weather Weighting:**
+- **PUW Weather**: Always scored at 100% (affects all flights)
+- **Origin Airport Weather**: Weighted at 70% for arrivals (delays inbound aircraft)
+- **Destination Airport Weather**: Weighted at 60% for departures (can close destination)
+
+Example: For a SEA→PUW arrival, Seattle fog gets 70% weight because it affects the inbound aircraft.
+
+### 3. Multi-Airport Historical Pattern Matching
+Queries similar **multi-airport conditions** from historical flights in DB:
+- Matches visibility ranges at both PUW and origin/destination airport
+- Matches wind thresholds at both airports
+- Matches freezing temperature patterns at both airports
+- Returns actual cancellation rates when similar conditions occurred simultaneously
+- Requires 5+ matching flights (vs 20+ for single-airport matching)
+
+This captures real-world scenarios like: "What happened when both PUW and Seattle had <1mi visibility?"
 
 ### Risk Score Formula
 ```
-Final Score = min(Seasonal_Baseline + Weather_Score + Historical_Adjustment, 99)
+PUW_Score = visibility_penalty + crosswind_penalty + icing_penalty + wind_penalty
+
+Origin_Score = (origin_weather_score × 0.7)  // for arrivals only
+Dest_Score = (dest_weather_score × 0.6)      // for departures only
+
+Weather_Score = PUW_Score + Origin_Score + Dest_Score
+
+Historical_Adjustment = (actual_cancellation_rate(similar_multi_airport_conditions) + current_score) / 2 - current_score
+
+Final_Score = min(Seasonal_Baseline + Weather_Score + Historical_Adjustment, 99)
 
 Risk Levels:
-- Low (0-39%):    "Likely to Fly ✓"
+- Low (0-39%):     "Likely to Fly ✓"
 - Medium (40-69%): "Watch Closely ⚠"
 - High (70-99%):   "High Chance ✗"
 ```
@@ -175,11 +207,17 @@ aircraft_reg, aircraft_model, last_updated
 ```
 
 ### historical_flights
-Long-term flight history for predictions
+Long-term flight history for predictions with multi-airport weather
 ```sql
-id, flight_number, flight_date, is_cancelled,
-visibility_miles, wind_speed_knots, temp_f,
-snowfall_cm, weather_code
+id, flight_number, flight_date, is_cancelled, origin_airport, dest_airport,
+
+-- Legacy single-airport weather (backward compatible)
+visibility_miles, wind_speed_knots, temp_f, snowfall_cm, weather_code,
+
+-- Multi-airport weather columns
+puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction, puw_temp_f, puw_weather_code,
+origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
+dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code
 ```
 
 ### bts_monthly_stats
@@ -212,16 +250,19 @@ graph LR
     I --> G
 ```
 
-1. **Data Collection** (Every 30 min)
-   - AeroDataBox API fetches flight schedules
-   - Open-Meteo provides weather data
+1. **Data Collection** (Every 45 min)
+   - AeroDataBox API fetches flight schedules from PUW
+   - Open-Meteo provides **10-day weather forecasts** for **PUW, SEA, and BOI** (in parallel)
+   - 240 hours of hourly weather data per airport
    - AviationStack verifies uncertain statuses
    - **Smart Gap Backfill**: Checks last 7 days for missing data and auto-fills gaps
 
 2. **Risk Calculation** (Real-time & Retroactive)
-   - Prediction engine analyzes current conditions
-   - Historical database queried for similar patterns
-   - Risk score computed with detailed breakdown
+   - Prediction engine analyzes conditions at **all three airports**
+   - Weather scored independently per airport with runway-specific crosswinds
+   - Origin/destination weather weighted based on flight type
+   - Historical database queried for **multi-airport pattern matching**
+   - Risk score computed with detailed breakdown showing each airport's contribution
    - **Retroactive Predictions**: Generated for backfilled flights to ensure complete history
 
 3. **Historical Logging** (On flight completion)
@@ -371,22 +412,275 @@ The app uses `/data` to store the SQLite database and logs, ensuring data persis
 
 ## 📊 Performance
 
-- **Database Size**: ~2MB (1,316 records)
+- **Database Size**: ~2MB (1,316 records and building)
 - **API Response Time**: <100ms average
 - **Sync Duration**:
   - Quick sync: ~2-3 seconds
   - Full sync: ~8-10 seconds
 - **Frontend Load**: <500ms
 
-## 🤝 Contributing
+# 🔧 Adapting for Other Airports
 
-Contributions are welcome! Please follow these steps:
+This application should be able to be adapted for any airport with minimal changes. You'll need to update configuration values and gather some airport-specific data.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+**Warning - I haven't tried/tested this**
+
+---
+
+### Step 1: Update Airport Configuration
+
+#### **Backend: flight_data.py** (Lines 15-16)
+Update the airport ICAO code:
+```python
+class FlightData:
+    def __init__(self):
+        self.airport_icao = "KORD"  # Change from KPUW to your airport (e.g., KORD for Chicago O'Hare)
+        self.airport_iata = "ORD"   # Change from PUW to your airport's IATA code
+```
+
+**Finding Your Airport Code:**
+- ICAO codes: 4 letters (e.g., KORD, KSEA, KJFK) - [ICAO Search](https://www.icao.int/)
+- IATA codes: 3 letters (e.g., ORD, SEA, JFK) - [IATA Search](https://www.iata.org/en/publications/directories/code-search/)
+- US airports typically start with 'K' (ICAO)
+
+---
+
+### Step 2: Update Weather Location
+
+#### **Backend: weather_data.py** (Lines 9-10)
+Update latitude/longitude for weather data:
+```python
+class WeatherData:
+    def __init__(self):
+        self.lat = 41.9742   # Chicago O'Hare latitude
+        self.lon = -87.9073  # Chicago O'Hare longitude
+```
+
+**Finding Coordinates:**
+- Google Maps: Right-click airport → "What's here?"
+- [AirNav.com](https://www.airnav.com/) - Search airport code
+- [SkyVector](https://skyvector.com/) - Aviation charts with precise coordinates
+
+---
+
+### Step 3: Update Runway Configuration
+
+#### **Backend: prediction_engine.py** (Lines 25-26)
+Update runway headings for crosswind calculations:
+```python
+class PredictionEngine:
+    # Chicago O'Hare has multiple runways: 04L/22R, 04R/22L, 09L/27R, etc.
+    RUNWAY_HEADINGS = [40, 220, 90, 270, 100, 280, 140, 320]  # Primary runways
+```
+
+**Finding Runway Information:**
+1. Visit [AirNav.com](https://www.airnav.com/) and search your airport
+2. Look for "Runway" section with headings (e.g., "09/27" = headings 90° and 270°)
+3. Include all active runways, or just the primary ones for simplicity
+4. Convert runway numbers to degrees: Runway 09 = 090°, Runway 27 = 270°
+
+**Example Conversions:**
+- Runway 01/19 → `[10, 190]`
+- Runway 05/23 → `[50, 230]` (current KPUW configuration)
+- Runway 09L/27R → `[90, 270]`
+- Runway 13/31 → `[130, 310]`
+
+---
+
+### Step 4: Update Seasonal Baselines (Optional but Recommended)
+
+#### **Backend: prediction_engine.py** (Lines 31-32)
+Replace with your airport's historical cancellation rates:
+```python
+self.seasonal_baselines = {
+    1: 8.2, 2: 7.5, 3: 4.1, 4: 3.2, 5: 2.8, 6: 3.5,
+    7: 2.1, 8: 2.9, 9: 2.4, 10: 2.1, 11: 4.8, 12: 9.1
+}
+```
+
+**Getting Historical Data:**
+1. Visit [BTS On-Time Performance Data](https://www.transtats.bts.gov/ot_delay/OT_DelayCause1.asp?20=E)
+2. Filter by your airport code (IATA: ORD, SEA, etc.)
+3. Download 3-5 years of data
+4. Calculate cancellation rate per month: `(Cancelled / Total) * 100`
+5. Average across years for each month
+
+---
+
+### Step 5: Update Frontend Branding
+
+#### **Frontend: index.html** (Lines 1-10)
+Update title, meta descriptions, and branding:
+```html
+<title>Will I Fly ORD - Chicago O'Hare Flight Tracker</title>
+<meta name="description" content="Real-time flight cancellation predictions for Chicago O'Hare Airport (ORD)" />
+```
+
+#### **Frontend: App.jsx** (Line ~30)
+Update the header:
+```jsx
+<h1>
+  <Plane /> Will I Fly ORD
+</h1>
+```
+
+#### **Frontend: HowItWorksPage.jsx**
+Update methodology text to reference your airport:
+- Airport name mentions
+- Runway configurations
+- Regional weather patterns (e.g., lake effect snow for Chicago, fog for SFO)
+
+#### **Frontend: ResourcesPage.jsx**
+Update external resource links:
+- Airport website
+- Local weather services
+- Regional aviation resources
+
+---
+
+### Step 6: Update SEO and Metadata
+
+#### **Frontend: public/sitemap.xml**
+Change domain to your deployment URL:
+```xml
+<loc>https://yourdomain.com/</loc>
+```
+
+#### **Frontend: public/robots.txt**
+Update sitemap URL:
+```
+Sitemap: https://yourdomain.com/sitemap.xml
+```
+
+#### **Frontend: App.jsx** (Schema.org markup)
+Update structured data (search for "application/ld+json"):
+```json
+{
+  "@type": "Airport",
+  "name": "Chicago O'Hare International Airport",
+  "iataCode": "ORD",
+  "icaoCode": "KORD"
+}
+```
+
+---
+
+### Step 7: Initialize Database with Historical Data
+
+#### **Option A: Start Fresh**
+```bash
+# Backend will auto-create empty database
+cd backend
+uvicorn api:app --reload
+```
+
+System will begin collecting data immediately. Predictions will improve as history grows.
+
+#### **Option B: Import Historical Data (Recommended)**
+
+1. **Gather CSV data:**
+```csv
+flight_number,flight_date,is_cancelled,actual_visibility_m,actual_wind_speed_kmh,actual_temp_c,actual_snowfall_cm,actual_weather_code
+AA123,2024-01-15,false,16000,25,5,0,2
+AA456,2024-01-16,true,800,45,-2,5,71
+```
+
+2. **Import:**
+```bash
+cd backend
+python import_historical_data.py
+```
+
+3. **Import BTS data for your airport:**
+   - Download from [BTS](https://www.transtats.bts.gov/ot_delay/OT_DelayCause1.asp?20=E)
+   - Filter by your airport's IATA code
+   - Run: `python ingest_bts_data.py`
+
+---
+
+### Step 8: Test and Deploy
+
+#### **Local Testing:**
+```bash
+# Terminal 1: Start backend
+cd backend
+uvicorn api:app --reload
+
+# Terminal 2: Start frontend
+cd frontend
+npm run dev
+
+# Visit http://localhost:5173
+```
+
+**Verify:**
+- Flights are loading for your airport
+- Weather data is correct for your location
+- Risk scores are being calculated
+- No console errors
+
+#### **Deploy to Production:**
+```bash
+# Update fly.toml with your app name
+fly deploy
+
+# Set API keys
+fly secrets set RAPIDAPI_KEY=xxx AVIATIONSTACK_KEY=xxx
+```
+
+---
+
+### Step 9: Regional Customizations (Optional)
+
+#### **Add Region-Specific Weather Risks:**
+
+For airports with unique weather challenges, add custom risk factors:
+
+**Example: Add fog detection for San Francisco (SFO)**
+```python
+# In prediction_engine.py, around line 180
+if vis is not None and vis < 0.25 and temp is not None and temp < 60:
+    weather_score += 40
+    desc = "Dense Fog (Common at SFO)"
+    factors.append(desc)
+```
+
+**Example: Add thunderstorm season for Florida airports**
+```python
+# In prediction_engine.py, around line 105
+if dt and dt.month in [6, 7, 8, 9]:  # Hurricane/thunderstorm season
+    baseline += 5
+    desc = "Thunderstorm Season"
+    factors.append(desc)
+```
+
+**Example: Add lake effect snow for Great Lakes airports**
+```python
+# In prediction_engine.py, around line 176
+if temp is not None and temp < 32 and 'snow' in desc_text:
+    if dt and dt.month in [11, 12, 1, 2]:  # Lake effect season
+        weather_score += 15
+        desc = "Lake Effect Snow Risk"
+        factors.append(desc)
+```
+
+---
+
+### Summary Checklist
+
+- [ ] Update airport codes (ICAO/IATA) in `flight_data.py`
+- [ ] Update lat/lon in `weather_data.py`
+- [ ] Update runway headings in `prediction_engine.py`
+- [ ] Update seasonal baselines (or use defaults)
+- [ ] Update frontend branding (title, headers, text)
+- [ ] Update SEO metadata and structured data
+- [ ] Update sitemap and robots.txt with your domain
+- [ ] Import historical data (optional but recommended)
+- [ ] Test locally
+- [ ] Deploy to production
+- [ ] Add region-specific weather customizations (optional)
+
+
 
 ## 📜 License
 
@@ -399,25 +693,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Open-Meteo** - Weather data API
 - **Lucide React** - Icon library
 - **Framer Motion** - Animation library
-
-## 📧 Contact
-
-For questions, suggestions, or issues:
-- **GitHub Issues**: [Create an issue](https://github.com/yourusername/will-i-fly-puw/issues)
-- **Discussions**: [Start a discussion](https://github.com/yourusername/will-i-fly-puw/discussions)
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
-## 🗺️ Roadmap
-
-- [ ] SMS/Email notifications for high-risk flights
-- [ ] Mobile app (React Native)
-- [ ] Support for additional airports
-- [ ] Machine learning model training
-- [ ] CI/CD pipeline
-- [ ] API rate limiting and caching
-- [ ] User accounts and saved flights
-
----
-
-**Built with ❤️ for travelers in the Palouse region**

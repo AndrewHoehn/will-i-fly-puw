@@ -20,9 +20,15 @@ class RiskScore:
         }
 
 class PredictionEngine:
-    # KPUW Runway Configuration
-    # Runway 05/23: Heading 050° / 230°
-    RUNWAY_HEADINGS = [50, 230]  # Degrees
+    # Multi-Airport Runway Configurations
+    RUNWAY_HEADINGS = {
+        "KPUW": [50, 230],           # Runway 05/23
+        "KSEA": [160, 340, 170, 350],  # Runways 16L/34R, 16C/34C, 16R/34L
+        "KBOI": [100, 280, 120, 300]   # Runways 10L/28R, 10R/28L
+    }
+
+    # Legacy single-airport support
+    LEGACY_RUNWAY_HEADINGS = [50, 230]  # KPUW
 
     def __init__(self):
         # Estimated cancellation rates (%) by month for KPUW
@@ -36,14 +42,15 @@ class PredictionEngine:
     def get_seasonal_baseline(self, date_obj):
         return self.seasonal_baselines.get(date_obj.month, 5)
 
-    def calculate_crosswind(self, wind_speed, wind_direction):
+    def calculate_crosswind(self, wind_speed, wind_direction, airport_code="KPUW"):
         """
-        Calculates the crosswind component for KPUW's runway 05/23.
+        Calculates the crosswind component for a given airport's runways.
         Returns the minimum crosswind component (uses the most favorable runway).
 
         Args:
             wind_speed: Wind speed in knots
             wind_direction: Wind direction in degrees (0-360)
+            airport_code: ICAO code (KPUW, KSEA, KBOI)
 
         Returns:
             Crosswind component in knots
@@ -51,9 +58,12 @@ class PredictionEngine:
         if wind_speed is None or wind_direction is None:
             return None
 
-        # Calculate crosswind for both runway headings, use the minimum
+        # Get runway headings for this airport
+        runway_headings = self.RUNWAY_HEADINGS.get(airport_code, self.LEGACY_RUNWAY_HEADINGS)
+
+        # Calculate crosswind for all runway headings, use the minimum
         crosswinds = []
-        for runway_heading in self.RUNWAY_HEADINGS:
+        for runway_heading in runway_headings:
             # Angle between wind and runway
             angle_diff = abs(wind_direction - runway_heading)
 
@@ -270,3 +280,272 @@ class PredictionEngine:
             level = "Low"
 
         return RiskScore(score, factors, level, breakdown, detailed_factors)
+
+    # ===== MULTI-AIRPORT WEATHER METHODS =====
+
+    def calculate_risk_multi_airport(self, flight, puw_weather, origin_weather, dest_weather):
+        """
+        Calculate flight cancellation risk using weather from all relevant airports.
+
+        Args:
+            flight: Flight dict with origin, destination, type, scheduled_time
+            puw_weather: Weather dict for KPUW
+            origin_weather: Weather dict for origin airport
+            dest_weather: Weather dict for destination airport
+
+        Returns:
+            RiskScore object with multi-airport analysis
+        """
+        score = 0
+        factors = []
+        detailed_factors = []
+        breakdown = {
+            "seasonal_baseline": 0,
+            "puw_weather_score": 0,
+            "origin_weather_score": 0,
+            "dest_weather_score": 0,
+            "history_adjustment": 0,
+            "final_score": 0
+        }
+
+        # 1. Seasonal Baseline
+        dt = flight.get('scheduled_time')
+        if isinstance(dt, str):
+            try:
+                dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            except ValueError:
+                dt = None
+
+        if dt:
+            baseline = self.get_seasonal_baseline(dt)
+            score += baseline
+            breakdown["seasonal_baseline"] = baseline
+            if baseline > 10:
+                desc = f"Seasonal Baseline: {baseline}% (High for {dt.strftime('%b')})"
+                factors.append(desc)
+                detailed_factors.append({
+                    "category": "Seasonal",
+                    "description": desc,
+                    "details": {"month": dt.strftime('%B'), "baseline": baseline}
+                })
+
+        # 2. PUW Weather Score
+        puw_score = self._score_airport_weather(puw_weather, "KPUW", flight.get('type'))
+        if puw_score > 0:
+            score += puw_score
+            breakdown["puw_weather_score"] = puw_score
+            factors.append(f"PUW: {self._describe_weather(puw_weather)}")
+
+        # 3. Origin Weather Score (critical for arrivals)
+        if flight.get('type') == 'arrival' and origin_weather:
+            origin_code = flight.get('origin', 'Unknown')
+            origin_score = self._score_airport_weather(origin_weather, origin_code, 'departure')
+
+            if origin_score > 20:
+                # Weight origin weather heavily for arrivals (70%)
+                weighted_score = origin_score * 0.7
+                score += weighted_score
+                breakdown["origin_weather_score"] = weighted_score
+                factors.append(f"{origin_code}: {self._describe_weather(origin_weather)} +{int(weighted_score)}%")
+                detailed_factors.append({
+                    "category": "Origin Weather",
+                    "description": f"{origin_code} weather affecting departure",
+                    "details": {
+                        "airport": origin_code,
+                        "conditions": self._describe_weather(origin_weather),
+                        "impact": f"+{int(weighted_score)}%"
+                    }
+                })
+
+        # 4. Destination Weather Score (critical for departures)
+        if flight.get('type') == 'departure' and dest_weather:
+            dest_code = flight.get('destination', 'Unknown')
+            dest_score = self._score_airport_weather(dest_weather, dest_code, 'arrival')
+
+            if dest_score > 20:
+                # Weight destination weather moderately for departures (60%)
+                weighted_score = dest_score * 0.6
+                score += weighted_score
+                breakdown["dest_weather_score"] = weighted_score
+                factors.append(f"{dest_code}: {self._describe_weather(dest_weather)} +{int(weighted_score)}%")
+                detailed_factors.append({
+                    "category": "Destination Weather",
+                    "description": f"{dest_code} weather affecting arrival",
+                    "details": {
+                        "airport": dest_code,
+                        "conditions": self._describe_weather(dest_weather),
+                        "impact": f"+{int(weighted_score)}%"
+                    }
+                })
+
+        # 5. Historical Matching (Separate PUW and Origin/Dest matching)
+        # Match PUW weather independently
+        puw_total, puw_cancelled = self.history_db.find_similar_flights(
+            visibility=puw_weather.get('visibility_miles') if puw_weather else None,
+            wind=puw_weather.get('wind_speed_knots') if puw_weather else None,
+            temp=puw_weather.get('temperature_f') if puw_weather else None
+        )
+
+        # Match origin/destination weather independently
+        other_total, other_cancelled = 0, 0
+        if flight.get('type') == 'arrival' and origin_weather:
+            other_total, other_cancelled = self.history_db.find_similar_flights_multi_airport(
+                puw_weather=None,  # Don't match PUW again
+                origin_weather=origin_weather,
+                dest_weather=None,
+                flight_type='arrival'
+            )
+        elif flight.get('type') == 'departure' and dest_weather:
+            other_total, other_cancelled = self.history_db.find_similar_flights_multi_airport(
+                puw_weather=None,  # Don't match PUW again
+                origin_weather=None,
+                dest_weather=dest_weather,
+                flight_type='departure'
+            )
+
+        # Combine both historical signals
+        historical_signals = []
+
+        if puw_total >= 10:
+            puw_hist_prob = (puw_cancelled / puw_total) * 100
+            historical_signals.append(puw_hist_prob)
+            desc = f"PUW History: {int(puw_hist_prob)}% cancelled in similar conditions ({puw_cancelled}/{puw_total})"
+            factors.append(desc)
+            detailed_factors.append({
+                "category": "Historical - PUW",
+                "description": desc,
+                "details": {
+                    "total_flights": puw_total,
+                    "cancelled_flights": puw_cancelled,
+                    "cancellation_rate": int(puw_hist_prob)
+                }
+            })
+
+        if other_total >= 5:
+            other_hist_prob = (other_cancelled / other_total) * 100
+            historical_signals.append(other_hist_prob)
+            airport_name = flight.get('origin') if flight.get('type') == 'arrival' else flight.get('destination')
+            desc = f"{airport_name} History: {int(other_hist_prob)}% cancelled in similar conditions ({other_cancelled}/{other_total})"
+            factors.append(desc)
+            detailed_factors.append({
+                "category": f"Historical - {airport_name}",
+                "description": desc,
+                "details": {
+                    "total_flights": other_total,
+                    "cancelled_flights": other_cancelled,
+                    "cancellation_rate": int(other_hist_prob)
+                }
+            })
+
+        # Blend with historical data if we have signals
+        if historical_signals:
+            avg_hist_prob = sum(historical_signals) / len(historical_signals)
+            new_score = (score + avg_hist_prob) / 2
+            breakdown["history_adjustment"] = new_score - score
+            score = new_score
+
+        # Cap score
+        score = min(score, 99)
+        score = max(score, 0)
+        breakdown["final_score"] = score
+
+        # Determine Level
+        if score >= 70:
+            level = "High"
+        elif score >= 40:
+            level = "Medium"
+        else:
+            level = "Low"
+
+        return RiskScore(score, factors, level, breakdown, detailed_factors)
+
+    def _score_airport_weather(self, weather, airport_code, operation_type):
+        """
+        Score weather conditions at a specific airport.
+
+        Args:
+            weather: Weather dict
+            airport_code: ICAO code
+            operation_type: 'arrival' or 'departure'
+
+        Returns:
+            Weather score (0-100)
+        """
+        if not weather:
+            return 0
+
+        score = 0
+        vis = weather.get('visibility_miles')
+        wind = weather.get('wind_speed_knots')
+        wind_dir = weather.get('wind_direction')
+        temp = weather.get('temperature_f')
+
+        # Visibility scoring
+        if vis is not None:
+            if vis < 0.5:
+                score += 60
+            elif vis < 1.0:
+                score += 40
+            elif vis < 3.0:
+                score += 15
+
+        # Crosswind scoring
+        crosswind = self.calculate_crosswind(wind, wind_dir, airport_code)
+        if crosswind is not None:
+            if crosswind > 25:
+                score += 50
+            elif crosswind > 15:
+                score += 30
+            elif crosswind > 10:
+                score += 10
+        elif wind is not None:
+            # Fallback to total wind if no direction
+            if wind > 40:
+                score += 50
+            elif wind > 30:
+                score += 30
+            elif wind > 20:
+                score += 10
+
+        # Icing conditions
+        if temp is not None and temp < 32:
+            desc_text = weather.get('description', '').lower() if weather.get('description') else ''
+            if 'snow' in desc_text or 'rain' in desc_text or 'fog' in desc_text:
+                score += 25
+
+        return score
+
+    def _describe_weather(self, weather):
+        """
+        Generate human-readable weather description.
+
+        Args:
+            weather: Weather dict
+
+        Returns:
+            String description
+        """
+        if not weather:
+            return "No data"
+
+        parts = []
+        vis = weather.get('visibility_miles')
+        wind = weather.get('wind_speed_knots')
+        temp = weather.get('temperature_f')
+
+        if vis is not None:
+            if vis < 1.0:
+                parts.append(f"Low visibility ({vis:.1f}mi)")
+            elif vis < 3.0:
+                parts.append(f"Reduced visibility ({vis:.1f}mi)")
+
+        if wind is not None and wind > 20:
+            parts.append(f"High wind ({wind:.0f}kn)")
+
+        if temp is not None and temp < 32:
+            parts.append(f"Freezing ({temp:.0f}°F)")
+
+        if not parts:
+            return "Good conditions"
+
+        return ", ".join(parts)

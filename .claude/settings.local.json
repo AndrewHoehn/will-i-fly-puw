@@ -19,7 +19,13 @@
       "Bash(/dev/null)",
       "Bash(done)",
       "Bash(npm install:*)",
-      "Bash(fly certs list:*)"
+      "Bash(fly certs list:*)",
+      "Bash(fly volumes list:*)",
+      "Bash(fly deploy:*)",
+      "Bash(fly ssh console:*)",
+      "Bash(fly logs:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []
