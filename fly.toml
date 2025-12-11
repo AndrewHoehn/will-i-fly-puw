@@ -7,6 +7,7 @@ app = 'kpuw-tracker'
 primary_region = 'sjc'
 
 [build]
+  dockerfile = "Dockerfile"
 
 [http_service]
   internal_port = 8000
