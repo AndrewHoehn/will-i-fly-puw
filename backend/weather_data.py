@@ -46,9 +46,11 @@ class WeatherData:
             params = {
                 "latitude": airport["lat"],
                 "longitude": airport["lon"],
-                "hourly": "visibility,wind_speed_10m,wind_direction_10m,weather_code,temperature_2m",
+                # Request comprehensive weather data
+                "hourly": "visibility,wind_speed_10m,wind_direction_10m,wind_gusts_10m,weather_code,temperature_2m,precipitation,snowfall,snow_depth,cloud_cover,relative_humidity_2m,surface_pressure",
                 "wind_speed_unit": "kn",
                 "temperature_unit": "fahrenheit",
+                "precipitation_unit": "inch",
                 "timezone": "UTC",
                 "past_days": past_days,
                 "forecast_days": forecast_days
@@ -61,25 +63,41 @@ class WeatherData:
             if 'hourly' in data:
                 hourly = data['hourly']
                 times = hourly['time']
-                vis = hourly['visibility']
-                wind = hourly['wind_speed_10m']
-                wind_dir = hourly['wind_direction_10m']
-                temp = hourly['temperature_2m']
-                codes = hourly['weather_code']
+                vis = hourly.get('visibility', [])
+                wind = hourly.get('wind_speed_10m', [])
+                wind_dir = hourly.get('wind_direction_10m', [])
+                wind_gust = hourly.get('wind_gusts_10m', [])
+                temp = hourly.get('temperature_2m', [])
+                codes = hourly.get('weather_code', [])
+                precip = hourly.get('precipitation', [])
+                snowfall = hourly.get('snowfall', [])
+                snow_depth = hourly.get('snow_depth', [])
+                cloud_cover = hourly.get('cloud_cover', [])
+                humidity = hourly.get('relative_humidity_2m', [])
+                pressure = hourly.get('surface_pressure', [])
 
                 for i, t_str in enumerate(times):
                     dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
-                    vis_miles = vis[i] * 0.000621371 if vis[i] is not None else None
+                    vis_miles = vis[i] * 0.000621371 if (i < len(vis) and vis[i] is not None) else None
 
                     weather_map[dt] = {
+                        # Core fields
                         "visibility_miles": vis_miles,
-                        "wind_speed_knots": wind[i],
-                        "wind_direction": wind_dir[i],
-                        "temperature_f": temp[i],
-                        "weather_code": codes[i]
+                        "wind_speed_knots": wind[i] if i < len(wind) else None,
+                        "wind_direction": wind_dir[i] if i < len(wind_dir) else None,
+                        "temperature_f": temp[i] if i < len(temp) else None,
+                        "weather_code": codes[i] if i < len(codes) else None,
+                        # Comprehensive fields
+                        "wind_gust_knots": wind_gust[i] if i < len(wind_gust) else None,
+                        "precipitation_in": precip[i] if i < len(precip) else None,
+                        "snow_depth_in": (snow_depth[i] / 2.54) if (i < len(snow_depth) and snow_depth[i] is not None) else None,  # cm to inches
+                        "cloud_cover_pct": cloud_cover[i] if i < len(cloud_cover) else None,
+                        "humidity_pct": humidity[i] if i < len(humidity) else None,
+                        "pressure_mb": pressure[i] if i < len(pressure) else None,
+                        "conditions": self._get_conditions_from_code(codes[i] if i < len(codes) else None)
                     }
 
-            logger.info(f"Fetched weather for {airport_code} ({airport['name']}): {len(weather_map)} hours")
+            logger.info(f"Fetched comprehensive weather for {airport_code} ({airport['name']}): {len(weather_map)} hours")
 
         except Exception as e:
             logger.error(f"Error fetching weather for {airport_code}: {e}")
@@ -291,6 +309,51 @@ class WeatherData:
         except Exception as e:
             logger.error(f"Error fetching TAF: {e}")
         return "TAF Unavailable"
+
+    def _get_conditions_from_code(self, code):
+        """
+        Convert WMO weather code to human-readable conditions text.
+
+        Args:
+            code: WMO weather code (0-99)
+
+        Returns:
+            str: Human-readable weather conditions
+        """
+        if code is None:
+            return ""
+
+        # WMO code mappings
+        conditions_map = {
+            0: "Clear sky",
+            1: "Mainly clear",
+            2: "Partly cloudy",
+            3: "Overcast",
+            45: "Fog",
+            48: "Depositing rime fog",
+            51: "Light drizzle",
+            53: "Moderate drizzle",
+            55: "Dense drizzle",
+            61: "Light rain",
+            63: "Moderate rain",
+            65: "Heavy rain",
+            66: "Light freezing rain",
+            67: "Heavy freezing rain",
+            71: "Light snow",
+            73: "Moderate snow",
+            75: "Heavy snow",
+            77: "Snow grains",
+            80: "Light rain showers",
+            81: "Moderate rain showers",
+            82: "Violent rain showers",
+            85: "Light snow showers",
+            86: "Heavy snow showers",
+            95: "Thunderstorm",
+            96: "Thunderstorm with light hail",
+            99: "Thunderstorm with heavy hail"
+        }
+
+        return conditions_map.get(code, f"Code {code}")
 
     def check_conditions(self, weather):
         """
