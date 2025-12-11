@@ -593,8 +593,8 @@ class HistoryDatabase:
             dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
             dest_wind_gust_knots, dest_precipitation_in, dest_snow_depth_in,
             dest_cloud_cover_pct, dest_pressure_mb, dest_humidity_pct, dest_conditions,
-            visibility_miles, wind_speed_knots, temp_f, weather_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            visibility_miles, wind_speed_knots, temp_f, snowfall_cm, weather_code
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         try:
@@ -663,6 +663,7 @@ class HistoryDatabase:
                     puw_weather.get('visibility_miles'),
                     puw_weather.get('wind_speed_knots'),
                     puw_weather.get('temp_f'),
+                    None,  # snowfall_cm (deprecated, always NULL)
                     puw_weather.get('weather_code')
                 ))
                 logger.info(f"Added flight {data.get('flight_number')} with comprehensive multi-airport weather")
