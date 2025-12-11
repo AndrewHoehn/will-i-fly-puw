@@ -300,24 +300,42 @@ def process_flights():
         multi_airport_weather = None
 
         # Extract multi-airport weather from weather_map (for both future AND historical)
-        puw_weather = w_cond if w_cond else {}
+        # Helper to ensure numeric values
+        def ensure_numeric_weather(weather_dict):
+            if not weather_dict:
+                return {}
+            w = weather_dict.copy()
+            numeric_fields = ['visibility_miles', 'wind_speed_knots', 'wind_direction', 'temperature_f',
+                            'wind_gust_knots', 'precipitation_in', 'snow_depth_in',
+                            'cloud_cover_pct', 'pressure_mb', 'humidity_pct', 'weather_code']
+            for field in numeric_fields:
+                if field in w and w[field] is not None:
+                    try:
+                        # Convert to float if it's a string
+                        if isinstance(w[field], str):
+                            w[field] = float(w[field])
+                    except (ValueError, TypeError):
+                        w[field] = None
+            return w
+
+        puw_weather = ensure_numeric_weather(w_cond) if w_cond else {}
         origin_weather = {}
         dest_weather = {}
 
         # Get weather from airports dict if available
         if w_cond and 'airports' in w_cond:
             airports_weather = w_cond['airports']
-            puw_weather = airports_weather.get('KPUW', w_cond)  # Fallback to w_cond for backward compat
+            puw_weather = ensure_numeric_weather(airports_weather.get('KPUW', w_cond))
 
             # Get origin/destination weather
             origin_code = f_out.get('origin')
             dest_code = f_out.get('destination')
 
             if origin_code and origin_code in airports_weather:
-                origin_weather = airports_weather[origin_code]
+                origin_weather = ensure_numeric_weather(airports_weather[origin_code])
 
             if dest_code and dest_code in airports_weather:
-                dest_weather = airports_weather[dest_code]
+                dest_weather = ensure_numeric_weather(airports_weather[dest_code])
 
         if local_dt > now_local:
             # Future: Calculate Fresh Risk with Multi-Airport Weather
@@ -454,12 +472,24 @@ def process_flights():
             flight_date_str = f_out.get('scheduled_time')[:10] if f_out.get('scheduled_time') else None
             if flight_date_str and (puw_weather or origin_weather or dest_weather):
                 # Convert weather dicts to match expected format (temp_f instead of temperature_f)
+                # Also ensure all numeric values are actually numeric (not strings)
                 def prepare_weather(weather_dict):
                     if not weather_dict:
                         return {}
                     w = weather_dict.copy()
                     if 'temperature_f' in w:
                         w['temp_f'] = w.pop('temperature_f')
+
+                    # Ensure numeric fields are floats, not strings
+                    numeric_fields = ['visibility_miles', 'wind_speed_knots', 'wind_direction', 'temp_f',
+                                    'wind_gust_knots', 'precipitation_in', 'snow_depth_in',
+                                    'cloud_cover_pct', 'pressure_mb', 'humidity_pct', 'weather_code']
+                    for field in numeric_fields:
+                        if field in w and w[field] is not None:
+                            try:
+                                w[field] = float(w[field]) if not isinstance(w[field], (int, float)) else w[field]
+                            except (ValueError, TypeError):
+                                w[field] = None
                     return w
 
                 fd.history_db.add_flight_multi_weather({
