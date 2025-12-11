@@ -3,6 +3,12 @@ from datetime import datetime, timedelta, timezone
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Handle both relative and absolute imports
+try:
+    from .metar_data import METARDataSource
+except ImportError:
+    from metar_data import METARDataSource
+
 logger = logging.getLogger(__name__)
 
 class WeatherData:
@@ -22,6 +28,9 @@ class WeatherData:
         self.forecast_url = "https://api.open-meteo.com/v1/forecast"
         self.last_weather_fetch = None
         self.weather_cache = {}  # Cache by airport code
+
+        # METAR data source for current conditions
+        self.metar_source = METARDataSource()
 
     def get_weather_for_airport(self, airport_code, past_days=7, forecast_days=3):
         """
@@ -102,7 +111,89 @@ class WeatherData:
         except Exception as e:
             logger.error(f"Error fetching weather for {airport_code}: {e}")
 
+        # HYBRID APPROACH: Overlay METAR data for current conditions
+        weather_map = self._overlay_metar_data(airport_code, weather_map)
+
         return weather_map
+
+    def _overlay_metar_data(self, airport_code, open_meteo_weather):
+        """
+        Overlay METAR observations on top of Open-Meteo forecast data.
+
+        METAR provides actual observed conditions which are more accurate than
+        model-based forecasts for current weather. We use METAR for recent
+        observations and keep Open-Meteo for future forecasts.
+
+        Strategy:
+        - Use METAR for current observation (if recent within 90 minutes)
+        - Fill nearby hours (±3 hours) with METAR if no better data available
+        - Keep Open-Meteo for forecast hours beyond current
+
+        Args:
+            airport_code: ICAO code
+            open_meteo_weather: dict of {datetime: weather_data} from Open-Meteo
+
+        Returns:
+            dict: Updated weather map with METAR data overlaid
+        """
+        if not open_meteo_weather:
+            return open_meteo_weather
+
+        try:
+            # Fetch current METAR
+            metar_data = self.metar_source.get_current_metar([airport_code])
+            metar_weather = metar_data.get(airport_code)
+
+            if not metar_weather:
+                logger.debug(f"No METAR data available for {airport_code}, using Open-Meteo only")
+                return open_meteo_weather
+
+            # Check if METAR is recent
+            obs_time = metar_weather.get('observation_time')
+            if not self.metar_source.is_metar_recent(obs_time):
+                logger.warning(f"METAR for {airport_code} is stale, using Open-Meteo only")
+                return open_meteo_weather
+
+            # Parse observation time
+            obs_dt = datetime.fromisoformat(obs_time.replace('Z', '+00:00'))
+            logger.info(f"Using METAR for {airport_code} from {obs_dt} (vis={metar_weather['visibility_miles']}mi)")
+
+            # Find the closest hour in Open-Meteo data
+            closest_hour = min(open_meteo_weather.keys(), key=lambda dt: abs((dt - obs_dt).total_seconds()))
+
+            # Overlay METAR data at the closest hour
+            # Keep Open-Meteo fields that METAR doesn't provide (snow_depth, cloud_cover, etc.)
+            if closest_hour in open_meteo_weather:
+                current_data = open_meteo_weather[closest_hour].copy()
+
+                # Override with METAR observations (more accurate)
+                current_data.update({
+                    'visibility_miles': metar_weather['visibility_miles'],
+                    'wind_speed_knots': metar_weather['wind_speed_knots'],
+                    'wind_direction': metar_weather['wind_direction'],
+                    'wind_gust_knots': metar_weather['wind_gust_knots'],
+                    'temperature_f': metar_weather['temperature_f'],
+                    'conditions': metar_weather['conditions'],
+                    'source': 'METAR'  # Mark as METAR data
+                })
+
+                # Use METAR humidity if available, fallback to Open-Meteo
+                if metar_weather.get('humidity_pct') is not None:
+                    current_data['humidity_pct'] = metar_weather['humidity_pct']
+
+                # Use METAR pressure if available
+                if metar_weather.get('pressure_mb') is not None:
+                    current_data['pressure_mb'] = metar_weather['pressure_mb']
+
+                open_meteo_weather[closest_hour] = current_data
+
+                logger.info(f"✓ Overlaid METAR data for {airport_code} at {closest_hour}: "
+                          f"vis={current_data['visibility_miles']}mi (was Open-Meteo forecast)")
+
+        except Exception as e:
+            logger.error(f"Error overlaying METAR data for {airport_code}: {e}")
+
+        return open_meteo_weather
 
     def get_weather_for_multiple_airports(self, airport_codes, past_days=7, forecast_days=3):
         """
