@@ -23,6 +23,8 @@ import './App.css'
 import { HowItWorksPage } from './components/HowItWorksPage'
 import { ResourcesPage } from './components/ResourcesPage'
 import { MonthlyStatsPage } from './components/MonthlyStatsPage'
+import { DatabaseViewerPage } from './components/DatabaseViewerPage'
+import { AdminDashboardPage } from './components/AdminDashboardPage'
 import { formatWeatherPlain, formatAirportFull, formatChanceLevel, formatMultiAirportWeather } from './utils/helpers'
 
 const API_URL = import.meta.env.VITE_API_URL || (import.meta.env.PROD ? '/api' : 'http://localhost:8000/api')
@@ -31,7 +33,7 @@ function App() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [activeView, setActiveView] = useState('flights') // flights, how-it-works, resources
+  const [activeView, setActiveView] = useState('flights') // flights, how-it-works, resources, database, admin
   const [flightTab, setFlightTab] = useState('future') // future, history (for flights view)
   const [filterDirection, setFilterDirection] = useState('all') // all, arrival, departure
   const [filterAirport, setFilterAirport] = useState('all') // all, SEA, BOI
@@ -42,7 +44,7 @@ function App() {
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1) // Remove #
-      if (['flights', 'monthly-stats', 'how-it-works', 'resources'].includes(hash)) {
+      if (['flights', 'monthly-stats', 'how-it-works', 'resources', 'database', 'admin'].includes(hash)) {
         setActiveView(hash)
       }
     }
@@ -193,6 +195,10 @@ function App() {
           <ResourcesPage />
         ) : activeView === 'monthly-stats' ? (
           <MonthlyStatsPage />
+        ) : activeView === 'database' ? (
+          <DatabaseViewerPage />
+        ) : activeView === 'admin' ? (
+          <AdminDashboardPage />
         ) : (
           <>
             {/* Flights View */}

@@ -461,10 +461,10 @@ class PredictionEngine:
 
     def _score_airport_weather(self, weather, airport_code, operation_type):
         """
-        Score weather conditions at a specific airport.
+        Score weather conditions at a specific airport using comprehensive weather data.
 
         Args:
-            weather: Weather dict
+            weather: Weather dict with comprehensive fields
             airport_code: ICAO code
             operation_type: 'arrival' or 'departure'
 
@@ -478,7 +478,13 @@ class PredictionEngine:
         vis = weather.get('visibility_miles')
         wind = weather.get('wind_speed_knots')
         wind_dir = weather.get('wind_direction')
+        wind_gust = weather.get('wind_gust_knots')
         temp = weather.get('temperature_f')
+        precip = weather.get('precipitation_in')
+        snow_depth = weather.get('snow_depth_in')
+        cloud_cover = weather.get('cloud_cover_pct')
+        humidity = weather.get('humidity_pct')
+        conditions = weather.get('conditions', '')
 
         # Visibility scoring
         if vis is not None:
@@ -489,8 +495,11 @@ class PredictionEngine:
             elif vis < 3.0:
                 score += 15
 
-        # Crosswind scoring
-        crosswind = self.calculate_crosswind(wind, wind_dir, airport_code)
+        # Wind gusts are more important than sustained winds for landing/takeoff safety
+        effective_wind = wind_gust if wind_gust is not None else wind
+
+        # Crosswind scoring (use gusts if available)
+        crosswind = self.calculate_crosswind(effective_wind, wind_dir, airport_code)
         if crosswind is not None:
             if crosswind > 25:
                 score += 50
@@ -498,29 +507,61 @@ class PredictionEngine:
                 score += 30
             elif crosswind > 10:
                 score += 10
-        elif wind is not None:
+        elif effective_wind is not None:
             # Fallback to total wind if no direction
-            if wind > 40:
+            if effective_wind > 40:
                 score += 50
-            elif wind > 30:
+            elif effective_wind > 30:
                 score += 30
-            elif wind > 20:
+            elif effective_wind > 20:
                 score += 10
 
-        # Icing conditions
+        # Snow on runway - critical for operations
+        if snow_depth is not None and snow_depth > 0:
+            if snow_depth > 6:
+                score += 40  # Major runway contamination
+            elif snow_depth > 3:
+                score += 25  # Moderate contamination
+            elif snow_depth > 1:
+                score += 15  # Light contamination
+
+        # Active precipitation - adds to risk
+        if precip is not None and precip > 0:
+            if temp is not None and temp < 32:
+                # Freezing precipitation (snow, ice)
+                if precip > 0.3:
+                    score += 30  # Heavy freezing precip
+                elif precip > 0.1:
+                    score += 20  # Moderate freezing precip
+                else:
+                    score += 10  # Light freezing precip
+            else:
+                # Rain (less severe but still impacts operations)
+                if precip > 0.5:
+                    score += 15  # Heavy rain
+                elif precip > 0.1:
+                    score += 8   # Moderate rain
+
+        # Cloud cover / ceiling (VFR vs IFR)
+        # Low clouds combined with poor visibility = IFR conditions
+        if cloud_cover is not None and cloud_cover > 90 and vis is not None and vis < 5:
+            score += 10  # IFR conditions
+
+        # Icing risk (freezing temp + high humidity + precipitation)
         if temp is not None and temp < 32:
-            desc_text = weather.get('description', '').lower() if weather.get('description') else ''
-            if 'snow' in desc_text or 'rain' in desc_text or 'fog' in desc_text:
-                score += 25
+            if humidity is not None and humidity > 80 and precip is not None and precip > 0:
+                score += 20  # High icing risk
+            elif 'snow' in conditions.lower() or 'ice' in conditions.lower() or 'freezing' in conditions.lower():
+                score += 15  # Icing conditions reported
 
         return score
 
     def _describe_weather(self, weather):
         """
-        Generate human-readable weather description.
+        Generate human-readable weather description using comprehensive data.
 
         Args:
-            weather: Weather dict
+            weather: Weather dict with comprehensive fields
 
         Returns:
             String description
@@ -531,19 +572,43 @@ class PredictionEngine:
         parts = []
         vis = weather.get('visibility_miles')
         wind = weather.get('wind_speed_knots')
+        wind_gust = weather.get('wind_gust_knots')
         temp = weather.get('temperature_f')
+        snow_depth = weather.get('snow_depth_in')
+        precip = weather.get('precipitation_in')
+        conditions = weather.get('conditions', '')
 
+        # Visibility
         if vis is not None:
             if vis < 1.0:
                 parts.append(f"Low visibility ({vis:.1f}mi)")
             elif vis < 3.0:
                 parts.append(f"Reduced visibility ({vis:.1f}mi)")
 
-        if wind is not None and wind > 20:
-            parts.append(f"High wind ({wind:.0f}kn)")
+        # Wind (prefer gusts if available)
+        if wind_gust is not None and wind_gust > 20:
+            parts.append(f"Gusty winds ({wind:.0f}kt gusting {wind_gust:.0f}kt)")
+        elif wind is not None and wind > 20:
+            parts.append(f"High wind ({wind:.0f}kt)")
 
+        # Snow depth
+        if snow_depth is not None and snow_depth > 0:
+            parts.append(f"{snow_depth:.1f}\" snow on ground")
+
+        # Active precipitation
+        if precip is not None and precip > 0.05:
+            if temp is not None and temp < 32:
+                parts.append(f"Freezing precip ({precip:.2f}\")")
+            else:
+                parts.append(f"Rain ({precip:.2f}\")")
+
+        # Temperature (if freezing)
         if temp is not None and temp < 32:
             parts.append(f"Freezing ({temp:.0f}°F)")
+
+        # Conditions text (if notable)
+        if conditions and any(word in conditions.lower() for word in ['storm', 'thunder', 'heavy', 'ice', 'fog']):
+            parts.append(conditions)
 
         if not parts:
             return "Good conditions"

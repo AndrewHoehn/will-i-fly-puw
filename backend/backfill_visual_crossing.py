@@ -1,20 +1,12 @@
 """
-Backfill comprehensive historical weather data using Visual Crossing Weather API.
+Backfill historical weather data using Visual Crossing Weather API.
 
-This script collects ALL aviation-relevant weather data for accurate flight risk assessment:
-- Visibility (critical for VFR/IFR decisions)
-- Wind speed, direction, and GUSTS (crosswind component calculations)
-- Temperature (density altitude, icing risk)
-- Precipitation and snow depth (runway conditions)
-- Cloud cover (VFR ceiling requirements)
-- Atmospheric pressure (altimeter settings)
-- Humidity (icing/fog risk)
-- Weather conditions text
+Visual Crossing provides complete historical weather including visibility,
+which Open-Meteo's archive API doesn't include.
 
 Usage:
-    python backfill_historical_weather.py [--limit N] [--dry-run]
-    python backfill_historical_weather.py --skip-until "2025-10-09"
-    python backfill_historical_weather.py --delay 0.2  # Fast rate (pay-as-you-go, no concurrency limit)
+    python backfill_visual_crossing.py [--limit N] [--dry-run]
+    python backfill_visual_crossing.py --skip-until "2025-10-09"
 """
 
 import sqlite3
@@ -47,14 +39,14 @@ def get_db_path():
 
 def get_visual_crossing_weather(airport_code, date):
     """
-    Fetch comprehensive historical weather from Visual Crossing.
+    Fetch historical weather from Visual Crossing for a specific date and airport.
 
     Args:
         airport_code: ICAO code (KPUW, KSEA, KBOI)
         date: datetime object
 
     Returns:
-        dict with complete weather data or None if failed
+        dict with weather data or None if failed
     """
     if airport_code not in AIRPORTS:
         return None
@@ -67,10 +59,9 @@ def get_visual_crossing_weather(airport_code, date):
 
     params = {
         "key": VISUAL_CROSSING_KEY,
-        "unitGroup": "us",  # US units (mph, F, miles, inches)
+        "unitGroup": "us",  # US units (mph, F, miles)
         "include": "hours",
-        # Request ALL aviation-relevant fields
-        "elements": "datetime,temp,visibility,windspeed,winddir,windgust,precip,snow,snowdepth,cloudcover,pressure,humidity,conditions"
+        "elements": "datetime,temp,visibility,windspeed,winddir,conditions"
     }
 
     try:
@@ -95,32 +86,20 @@ def get_visual_crossing_weather(airport_code, date):
         # Find closest hour
         closest_hour = min(hours, key=lambda h: abs(int(h['datetime'].split(':')[0]) - target_hour))
 
-        # Convert to our format with comprehensive data
+        # Convert to our format
         weather = {
-            # Core fields (already exist in DB)
-            'visibility_miles': closest_hour.get('visibility'),
+            'visibility_miles': closest_hour.get('visibility'),  # Already in miles
             'wind_speed_knots': closest_hour.get('windspeed') * 0.868976 if closest_hour.get('windspeed') else None,  # mph to knots
             'wind_direction': closest_hour.get('winddir'),
             'temperature_f': closest_hour.get('temp'),
-            'weather_code': 0,  # Visual Crossing uses text conditions
-
-            # New comprehensive fields
-            'wind_gust_knots': closest_hour.get('windgust') * 0.868976 if closest_hour.get('windgust') else None,  # mph to knots
-            'precipitation_in': closest_hour.get('precip', 0),  # inches
-            'snow_depth_in': closest_hour.get('snowdepth', 0),  # inches on ground
-            'cloud_cover_pct': closest_hour.get('cloudcover'),  # percentage
-            'pressure_mb': closest_hour.get('pressure'),  # millibars
-            'humidity_pct': closest_hour.get('humidity'),  # percentage
-            'conditions': closest_hour.get('conditions', ''),  # text description
+            'weather_code': 0  # Visual Crossing uses text conditions, we'll use 0 for now
         }
 
         return weather
 
     except requests.exceptions.HTTPError as e:
         if e.response.status_code == 429:
-            logger.error(f"Rate limit exceeded for {airport_code} - sleeping for 60 seconds...")
-            time.sleep(60)
-            return None
+            logger.error(f"Rate limit exceeded for {airport_code}")
         else:
             logger.error(f"HTTP error for {airport_code}: {e}")
         return None
@@ -128,16 +107,16 @@ def get_visual_crossing_weather(airport_code, date):
         logger.error(f"Error fetching weather for {airport_code} on {date_str}: {e}")
         return None
 
-def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, delay_seconds=0.2):
+def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, delay_seconds=2):
     """
-    Backfill comprehensive multi-airport weather for historical flights.
+    Backfill multi-airport weather for historical flights using Visual Crossing.
 
     Args:
         limit: Max number of flights to backfill (None = all)
         dry_run: If True, don't actually update database
         skip_until: Skip flights until this date (YYYY-MM-DD format)
         batch_size: Commit every N flights (helps with resume)
-        delay_seconds: Delay between flights (default 0.2s, pay-as-you-go has no concurrency limit)
+        delay_seconds: Delay between API calls (Visual Crossing allows 1000/day on free tier)
     """
     db_path = get_db_path()
     conn = sqlite3.connect(db_path)
@@ -148,8 +127,6 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
         SELECT id, flight_number, flight_date, origin_airport, dest_airport
         FROM historical_flights
         WHERE (puw_visibility_miles IS NULL OR origin_visibility_miles IS NULL OR dest_visibility_miles IS NULL)
-        AND origin_airport IS NOT NULL
-        AND dest_airport IS NOT NULL
         AND flight_date IS NOT NULL
         ORDER BY flight_date DESC
     """
@@ -174,7 +151,6 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
     batch_count = 0
     skip_mode = bool(skip_until)
     api_calls = 0
-    start_time = time.time()
 
     for flight_id, flight_number, flight_date, origin_airport, dest_airport in flights:
         try:
@@ -206,50 +182,48 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
 
             logger.info(f"[{success_count + error_count + 1}/{len(flights)}] Backfilling {flight_number} on {flight_date_str}")
 
-            # Rate limiting between flights (not between airports of same flight)
+            # Rate limiting
             if api_calls > 0 and delay_seconds > 0:
                 time.sleep(delay_seconds)
 
-            # Fetch weather for all airports of this flight
+            # Fetch weather for all airports
             weather_data = {}
-            flight_api_calls = 0
 
             for airport_code in ["KPUW", origin_airport, dest_airport]:
                 if not airport_code or airport_code not in AIRPORTS:
                     continue
 
-                # Skip duplicate airports (e.g., if origin == KPUW)
-                if airport_code in weather_data:
-                    continue
-
                 airport_weather = get_visual_crossing_weather(airport_code, date_obj)
                 api_calls += 1
-                flight_api_calls += 1
 
                 if airport_weather:
                     weather_data[airport_code] = airport_weather
                 else:
                     logger.warning(f"No weather data for {airport_code} on {flight_date_str}")
 
+                # Small delay between airports
+                time.sleep(0.5)
+
             if not dry_run:
-                # Update database with comprehensive weather data
+                # Update database
                 update_sql = """
                     UPDATE historical_flights
                     SET
-                        puw_visibility_miles = ?, puw_wind_speed_knots = ?, puw_wind_direction = ?,
-                        puw_temp_f = ?, puw_weather_code = ?,
-                        puw_wind_gust_knots = ?, puw_precipitation_in = ?, puw_snow_depth_in = ?,
-                        puw_cloud_cover_pct = ?, puw_pressure_mb = ?, puw_humidity_pct = ?, puw_conditions = ?,
-
-                        origin_visibility_miles = ?, origin_wind_speed_knots = ?, origin_wind_direction = ?,
-                        origin_temp_f = ?, origin_weather_code = ?,
-                        origin_wind_gust_knots = ?, origin_precipitation_in = ?, origin_snow_depth_in = ?,
-                        origin_cloud_cover_pct = ?, origin_pressure_mb = ?, origin_humidity_pct = ?, origin_conditions = ?,
-
-                        dest_visibility_miles = ?, dest_wind_speed_knots = ?, dest_wind_direction = ?,
-                        dest_temp_f = ?, dest_weather_code = ?,
-                        dest_wind_gust_knots = ?, dest_precipitation_in = ?, dest_snow_depth_in = ?,
-                        dest_cloud_cover_pct = ?, dest_pressure_mb = ?, dest_humidity_pct = ?, dest_conditions = ?
+                        puw_visibility_miles = ?,
+                        puw_wind_speed_knots = ?,
+                        puw_wind_direction = ?,
+                        puw_temp_f = ?,
+                        puw_weather_code = ?,
+                        origin_visibility_miles = ?,
+                        origin_wind_speed_knots = ?,
+                        origin_wind_direction = ?,
+                        origin_temp_f = ?,
+                        origin_weather_code = ?,
+                        dest_visibility_miles = ?,
+                        dest_wind_speed_knots = ?,
+                        dest_wind_direction = ?,
+                        dest_temp_f = ?,
+                        dest_weather_code = ?
                     WHERE id = ?
                 """
 
@@ -258,24 +232,21 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
                 dest = weather_data.get(dest_airport, {})
 
                 cursor.execute(update_sql, (
-                    # PUW weather
-                    puw.get('visibility_miles'), puw.get('wind_speed_knots'), puw.get('wind_direction'),
-                    puw.get('temperature_f'), puw.get('weather_code'),
-                    puw.get('wind_gust_knots'), puw.get('precipitation_in'), puw.get('snow_depth_in'),
-                    puw.get('cloud_cover_pct'), puw.get('pressure_mb'), puw.get('humidity_pct'), puw.get('conditions'),
-
-                    # Origin weather
-                    origin.get('visibility_miles'), origin.get('wind_speed_knots'), origin.get('wind_direction'),
-                    origin.get('temperature_f'), origin.get('weather_code'),
-                    origin.get('wind_gust_knots'), origin.get('precipitation_in'), origin.get('snow_depth_in'),
-                    origin.get('cloud_cover_pct'), origin.get('pressure_mb'), origin.get('humidity_pct'), origin.get('conditions'),
-
-                    # Destination weather
-                    dest.get('visibility_miles'), dest.get('wind_speed_knots'), dest.get('wind_direction'),
-                    dest.get('temperature_f'), dest.get('weather_code'),
-                    dest.get('wind_gust_knots'), dest.get('precipitation_in'), dest.get('snow_depth_in'),
-                    dest.get('cloud_cover_pct'), dest.get('pressure_mb'), dest.get('humidity_pct'), dest.get('conditions'),
-
+                    puw.get('visibility_miles'),
+                    puw.get('wind_speed_knots'),
+                    puw.get('wind_direction'),
+                    puw.get('temperature_f'),
+                    puw.get('weather_code'),
+                    origin.get('visibility_miles'),
+                    origin.get('wind_speed_knots'),
+                    origin.get('wind_direction'),
+                    origin.get('temperature_f'),
+                    origin.get('weather_code'),
+                    dest.get('visibility_miles'),
+                    dest.get('wind_speed_knots'),
+                    dest.get('wind_direction'),
+                    dest.get('temperature_f'),
+                    dest.get('weather_code'),
                     flight_id
                 ))
 
@@ -285,10 +256,7 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
             # Commit in batches
             if not dry_run and batch_count >= batch_size:
                 conn.commit()
-                elapsed = time.time() - start_time
-                rate = api_calls / elapsed if elapsed > 0 else 0
-                est_cost = api_calls * 0.0001
-                logger.info(f"✓ Committed batch of {batch_count} flights (Total: {success_count} success, {error_count} errors, {api_calls} API calls, {rate:.2f} calls/sec, ${est_cost:.4f})")
+                logger.info(f"✓ Committed batch of {batch_count} flights (Total: {success_count} success, {error_count} errors, {api_calls} API calls)")
                 batch_count = 0
 
         except KeyboardInterrupt:
@@ -297,7 +265,7 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
                 conn.commit()
             conn.close()
             logger.info(f"Progress saved: {success_count} success, {error_count} errors, {skipped_count} skipped, {api_calls} API calls")
-            logger.info(f"To resume, run: python backfill_historical_weather.py --skip-until \"{flight_date_str}\"")
+            logger.info(f"To resume, run: python backfill_visual_crossing.py --skip-until \"{flight_date_str}\"")
             raise
 
         except Exception as e:
@@ -312,39 +280,36 @@ def backfill_weather(limit=None, dry_run=False, skip_until=None, batch_size=50, 
 
     conn.close()
 
-    elapsed = time.time() - start_time
-    est_cost = api_calls * 0.0001
     logger.info(f"Backfill complete: {success_count} success, {error_count} errors, {skipped_count} skipped")
-    logger.info(f"Total API calls: {api_calls} (cost: ${est_cost:.4f})")
-    logger.info(f"Total time: {elapsed/60:.1f} minutes ({api_calls/elapsed:.2f} calls/sec average)")
+    logger.info(f"Total API calls: {api_calls} (approx cost: ${api_calls * 0.0001:.4f})")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Backfill comprehensive historical weather data using Visual Crossing API",
+        description="Backfill historical weather data using Visual Crossing API",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Test with 5 flights
-  python backfill_historical_weather.py --limit 5 --dry-run
+  # Test with 10 flights
+  python backfill_visual_crossing.py --limit 10 --dry-run
 
-  # Backfill all flights with optimized rate (0.2s delay = ~5 calls/sec)
-  python backfill_historical_weather.py --delay 0.2
+  # Backfill all flights (will cost ~$0.42 for 1,401 flights × 3 airports)
+  python backfill_visual_crossing.py
 
   # Resume from specific date
-  python backfill_historical_weather.py --skip-until "2025-10-09"
+  python backfill_visual_crossing.py --skip-until "2025-10-09"
 
-  # Maximum speed (no delay, watch for 429 errors)
-  python backfill_historical_weather.py --delay 0
+  # Slower rate (safer, 3 second delay)
+  python backfill_visual_crossing.py --delay 3
 
-Note: Pay-as-you-go plan: $0.0001 per record, no concurrency limits.
-For 1,172 flights × ~3 airports = ~3,516 calls = ~$0.35 total cost.
+Note: Visual Crossing free tier allows 1000 API calls/day.
+With 3 airports per flight, you can backfill ~330 flights/day.
         """
     )
     parser.add_argument("--limit", type=int, help="Max flights to process")
     parser.add_argument("--dry-run", action="store_true", help="Don't update database")
     parser.add_argument("--skip-until", type=str, help="Skip flights until this date (YYYY-MM-DD)")
     parser.add_argument("--batch-size", type=int, default=50, help="Commit every N flights (default: 50)")
-    parser.add_argument("--delay", type=float, default=0.2, help="Delay between flights in seconds (default: 0.2)")
+    parser.add_argument("--delay", type=float, default=2.0, help="Delay between flights in seconds (default: 2.0)")
     args = parser.parse_args()
 
     backfill_weather(
