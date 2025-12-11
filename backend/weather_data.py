@@ -87,7 +87,11 @@ class WeatherData:
 
                 for i, t_str in enumerate(times):
                     dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
+                    # Convert meters to miles and cap at 10SM (standard METAR limit)
+                    # Open-Meteo's visibility forecasts are often unrealistically high (50+mi)
                     vis_miles = vis[i] * 0.000621371 if (i < len(vis) and vis[i] is not None) else None
+                    if vis_miles is not None and vis_miles > 10.0:
+                        vis_miles = 10.0  # Cap at 10 statute miles (METAR reporting limit)
 
                     weather_map[dt] = {
                         # Core fields
