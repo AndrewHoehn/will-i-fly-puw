@@ -43,7 +43,45 @@ class HistoryDatabase:
             wind_speed_knots REAL,
             temp_f REAL,
             snowfall_cm REAL,
-            weather_code INTEGER
+            weather_code INTEGER,
+            puw_visibility_miles REAL,
+            puw_wind_speed_knots REAL,
+            puw_wind_direction REAL,
+            puw_temp_f REAL,
+            puw_weather_code INTEGER,
+            origin_airport TEXT,
+            origin_visibility_miles REAL,
+            origin_wind_speed_knots REAL,
+            origin_wind_direction REAL,
+            origin_temp_f REAL,
+            origin_weather_code INTEGER,
+            dest_airport TEXT,
+            dest_visibility_miles REAL,
+            dest_wind_speed_knots REAL,
+            dest_wind_direction REAL,
+            dest_temp_f REAL,
+            dest_weather_code INTEGER,
+            puw_wind_gust_knots REAL,
+            puw_precipitation_in REAL,
+            puw_snow_depth_in REAL,
+            puw_cloud_cover_pct REAL,
+            puw_pressure_mb REAL,
+            puw_humidity_pct REAL,
+            puw_conditions TEXT,
+            origin_wind_gust_knots REAL,
+            origin_precipitation_in REAL,
+            origin_snow_depth_in REAL,
+            origin_cloud_cover_pct REAL,
+            origin_pressure_mb REAL,
+            origin_humidity_pct REAL,
+            origin_conditions TEXT,
+            dest_wind_gust_knots REAL,
+            dest_precipitation_in REAL,
+            dest_snow_depth_in REAL,
+            dest_cloud_cover_pct REAL,
+            dest_pressure_mb REAL,
+            dest_humidity_pct REAL,
+            dest_conditions TEXT
         );
         """
 
@@ -633,11 +671,12 @@ class HistoryDatabase:
 
     def find_similar_flights_multi_airport(self, puw_weather=None, origin_weather=None, dest_weather=None, flight_type=None):
         """
-        Find flights with similar weather conditions across multiple airports.
-        More sophisticated matching that considers origin/destination weather.
+        Find flights with similar comprehensive weather conditions across multiple airports.
+        Uses advanced pattern matching with wind gusts, precipitation, and snow depth.
 
         Args:
-            puw_weather: dict with visibility_miles, wind_speed_knots, temp_f
+            puw_weather: dict with visibility_miles, wind_speed_knots, wind_gust_knots, temp_f,
+                        precipitation_in, snow_depth_in
             origin_weather: dict (same structure)
             dest_weather: dict (same structure)
             flight_type: "arrival" or "departure" (affects which airports are weighted)
@@ -658,11 +697,26 @@ class HistoryDatabase:
                 sql += " AND origin_visibility_miles <= ?"
                 params.append(vis + 0.5)
 
-            # Check origin wind
+            # Check origin wind (prefer gusts)
+            wind_gust = origin_weather.get('wind_gust_knots')
             wind = origin_weather.get('wind_speed_knots')
-            if wind is not None and wind > 20:
-                sql += " AND origin_wind_speed_knots >= ?"
-                params.append(wind - 5)
+            effective_wind = wind_gust if wind_gust is not None else wind
+            if effective_wind is not None and effective_wind > 20:
+                sql += " AND (origin_wind_gust_knots >= ? OR origin_wind_speed_knots >= ?)"
+                params.append(effective_wind - 5)
+                params.append(effective_wind - 5)
+
+            # Check origin snow depth
+            snow = origin_weather.get('snow_depth_in')
+            if snow is not None and snow > 1:
+                sql += " AND origin_snow_depth_in >= ?"
+                params.append(max(0, snow - 2))
+
+            # Check origin precipitation
+            precip = origin_weather.get('precipitation_in')
+            if precip is not None and precip > 0.1:
+                sql += " AND origin_precipitation_in >= ?"
+                params.append(max(0, precip - 0.1))
 
         elif flight_type == "departure" and dest_weather:
             # Check destination visibility
@@ -671,23 +725,51 @@ class HistoryDatabase:
                 sql += " AND dest_visibility_miles <= ?"
                 params.append(vis + 0.5)
 
-            # Check destination wind
+            # Check destination wind (prefer gusts)
+            wind_gust = dest_weather.get('wind_gust_knots')
             wind = dest_weather.get('wind_speed_knots')
-            if wind is not None and wind > 20:
-                sql += " AND dest_wind_speed_knots >= ?"
-                params.append(wind - 5)
+            effective_wind = wind_gust if wind_gust is not None else wind
+            if effective_wind is not None and effective_wind > 20:
+                sql += " AND (dest_wind_gust_knots >= ? OR dest_wind_speed_knots >= ?)"
+                params.append(effective_wind - 5)
+                params.append(effective_wind - 5)
 
-        # Always check PUW weather for local conditions
+            # Check destination snow depth
+            snow = dest_weather.get('snow_depth_in')
+            if snow is not None and snow > 1:
+                sql += " AND dest_snow_depth_in >= ?"
+                params.append(max(0, snow - 2))
+
+            # Check destination precipitation
+            precip = dest_weather.get('precipitation_in')
+            if precip is not None and precip > 0.1:
+                sql += " AND dest_precipitation_in >= ?"
+                params.append(max(0, precip - 0.1))
+
+        # Always check PUW weather for local conditions (comprehensive)
         if puw_weather:
             vis = puw_weather.get('visibility_miles')
             if vis is not None and vis < 3.0:
                 sql += " AND puw_visibility_miles <= ?"
                 params.append(vis + 0.5)
 
+            wind_gust = puw_weather.get('wind_gust_knots')
             wind = puw_weather.get('wind_speed_knots')
-            if wind is not None and wind > 20:
-                sql += " AND puw_wind_speed_knots >= ?"
-                params.append(wind - 5)
+            effective_wind = wind_gust if wind_gust is not None else wind
+            if effective_wind is not None and effective_wind > 20:
+                sql += " AND (puw_wind_gust_knots >= ? OR puw_wind_speed_knots >= ?)"
+                params.append(effective_wind - 5)
+                params.append(effective_wind - 5)
+
+            snow = puw_weather.get('snow_depth_in')
+            if snow is not None and snow > 1:
+                sql += " AND puw_snow_depth_in >= ?"
+                params.append(max(0, snow - 2))
+
+            precip = puw_weather.get('precipitation_in')
+            if precip is not None and precip > 0.1:
+                sql += " AND puw_precipitation_in >= ?"
+                params.append(max(0, precip - 0.1))
 
         try:
             with self._get_conn() as conn:
