@@ -583,18 +583,19 @@ class HistoryDatabase:
         insert_sql = """
         INSERT INTO historical_flights (
             flight_number, flight_date, is_cancelled,
-            origin_airport, dest_airport,
+            visibility_miles, wind_speed_knots, temp_f, snowfall_cm, weather_code,
             puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction, puw_temp_f, puw_weather_code,
+            origin_airport,
+            origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
+            dest_airport,
+            dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
             puw_wind_gust_knots, puw_precipitation_in, puw_snow_depth_in,
             puw_cloud_cover_pct, puw_pressure_mb, puw_humidity_pct, puw_conditions,
-            origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
             origin_wind_gust_knots, origin_precipitation_in, origin_snow_depth_in,
             origin_cloud_cover_pct, origin_pressure_mb, origin_humidity_pct, origin_conditions,
-            dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
             dest_wind_gust_knots, dest_precipitation_in, dest_snow_depth_in,
-            dest_cloud_cover_pct, dest_pressure_mb, dest_humidity_pct, dest_conditions,
-            visibility_miles, wind_speed_knots, temp_f, snowfall_cm, weather_code
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            dest_cloud_cover_pct, dest_pressure_mb, dest_humidity_pct, dest_conditions
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         try:
@@ -611,18 +612,40 @@ class HistoryDatabase:
                 dest_weather = data.get('dest_weather', {})
 
                 # Insert with comprehensive airport weather
+                # Column order matches schema: flight info, legacy fields, puw core, origin_airport, origin core, dest_airport, dest core, then comprehensive fields for all 3
                 conn.execute(insert_sql, (
+                    # Flight info
                     data.get('flight_number'),
                     data.get('flight_date'),
                     1 if data.get('is_cancelled') else 0,
-                    data.get('origin_airport'),
-                    data.get('dest_airport'),
+                    # Legacy columns (use PUW data for backward compatibility)
+                    puw_weather.get('visibility_miles'),
+                    puw_weather.get('wind_speed_knots'),
+                    puw_weather.get('temp_f'),
+                    None,  # snowfall_cm (deprecated, always NULL)
+                    puw_weather.get('weather_code'),
                     # PUW weather - core fields
                     puw_weather.get('visibility_miles'),
                     puw_weather.get('wind_speed_knots'),
                     puw_weather.get('wind_direction'),
                     puw_weather.get('temp_f'),
                     puw_weather.get('weather_code'),
+                    # Origin airport
+                    data.get('origin_airport'),
+                    # Origin weather - core fields
+                    origin_weather.get('visibility_miles'),
+                    origin_weather.get('wind_speed_knots'),
+                    origin_weather.get('wind_direction'),
+                    origin_weather.get('temp_f'),
+                    origin_weather.get('weather_code'),
+                    # Dest airport
+                    data.get('dest_airport'),
+                    # Dest weather - core fields
+                    dest_weather.get('visibility_miles'),
+                    dest_weather.get('wind_speed_knots'),
+                    dest_weather.get('wind_direction'),
+                    dest_weather.get('temp_f'),
+                    dest_weather.get('weather_code'),
                     # PUW weather - comprehensive fields
                     puw_weather.get('wind_gust_knots'),
                     puw_weather.get('precipitation_in'),
@@ -631,12 +654,6 @@ class HistoryDatabase:
                     puw_weather.get('pressure_mb'),
                     puw_weather.get('humidity_pct'),
                     puw_weather.get('conditions'),
-                    # Origin weather - core fields
-                    origin_weather.get('visibility_miles'),
-                    origin_weather.get('wind_speed_knots'),
-                    origin_weather.get('wind_direction'),
-                    origin_weather.get('temp_f'),
-                    origin_weather.get('weather_code'),
                     # Origin weather - comprehensive fields
                     origin_weather.get('wind_gust_knots'),
                     origin_weather.get('precipitation_in'),
@@ -645,12 +662,6 @@ class HistoryDatabase:
                     origin_weather.get('pressure_mb'),
                     origin_weather.get('humidity_pct'),
                     origin_weather.get('conditions'),
-                    # Dest weather - core fields
-                    dest_weather.get('visibility_miles'),
-                    dest_weather.get('wind_speed_knots'),
-                    dest_weather.get('wind_direction'),
-                    dest_weather.get('temp_f'),
-                    dest_weather.get('weather_code'),
                     # Dest weather - comprehensive fields
                     dest_weather.get('wind_gust_knots'),
                     dest_weather.get('precipitation_in'),
@@ -658,13 +669,7 @@ class HistoryDatabase:
                     dest_weather.get('cloud_cover_pct'),
                     dest_weather.get('pressure_mb'),
                     dest_weather.get('humidity_pct'),
-                    dest_weather.get('conditions'),
-                    # Legacy columns (use PUW data for backward compatibility)
-                    puw_weather.get('visibility_miles'),
-                    puw_weather.get('wind_speed_knots'),
-                    puw_weather.get('temp_f'),
-                    None,  # snowfall_cm (deprecated, always NULL)
-                    puw_weather.get('weather_code')
+                    dest_weather.get('conditions')
                 ))
                 logger.info(f"Added flight {data.get('flight_number')} with comprehensive multi-airport weather")
         except Exception as e:
