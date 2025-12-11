@@ -87,9 +87,10 @@ class WeatherData:
 
                 for i, t_str in enumerate(times):
                     dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
-                    # Convert meters to miles
-                    # Open-Meteo returns visibility in METERS
-                    vis_miles = vis[i] * 0.000621371 if (i < len(vis) and vis[i] is not None) else None
+                    # Convert visibility to miles
+                    # IMPORTANT: When precipitation_unit='inch', Open-Meteo returns visibility in FEET, not meters!
+                    # This is undocumented behavior - the API converts all length values to imperial units
+                    vis_miles = (vis[i] / 5280) if (i < len(vis) and vis[i] is not None) else None  # feet to miles
 
                     weather_map[dt] = {
                         # Core fields
