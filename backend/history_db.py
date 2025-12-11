@@ -872,8 +872,14 @@ class HistoryDatabase:
         cursor.execute("""
             SELECT
                 puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction, puw_temp_f, puw_weather_code,
+                puw_wind_gust_knots, puw_precipitation_in, puw_snow_depth_in,
+                puw_cloud_cover_pct, puw_pressure_mb, puw_humidity_pct, puw_conditions,
                 origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
+                origin_wind_gust_knots, origin_precipitation_in, origin_snow_depth_in,
+                origin_cloud_cover_pct, origin_pressure_mb, origin_humidity_pct, origin_conditions,
                 dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
+                dest_wind_gust_knots, dest_precipitation_in, dest_snow_depth_in,
+                dest_cloud_cover_pct, dest_pressure_mb, dest_humidity_pct, dest_conditions,
                 origin_airport, dest_airport
             FROM historical_flights
             WHERE flight_number = ? AND substr(flight_date, 1, 10) = ?
@@ -886,10 +892,13 @@ class HistoryDatabase:
         if not row:
             return None
 
-        # Unpack row
+        # Unpack row with comprehensive weather fields
         (puw_vis, puw_wind, puw_wind_dir, puw_temp, puw_code,
+         puw_gust, puw_precip, puw_snow, puw_cloud, puw_pressure, puw_humidity, puw_conditions,
          origin_vis, origin_wind, origin_wind_dir, origin_temp, origin_code,
+         origin_gust, origin_precip, origin_snow, origin_cloud, origin_pressure, origin_humidity, origin_conditions,
          dest_vis, dest_wind, dest_wind_dir, dest_temp, dest_code,
+         dest_gust, dest_precip, dest_snow, dest_cloud, dest_pressure, dest_humidity, dest_conditions,
          origin_airport, dest_airport) = row
 
         # Check if we have any multi-airport data
@@ -908,7 +917,14 @@ class HistoryDatabase:
                 'wind_speed_knots': puw_wind,
                 'wind_direction': puw_wind_dir,
                 'temperature_f': puw_temp,
-                'weather_code': puw_code
+                'weather_code': puw_code,
+                'wind_gust_knots': puw_gust,
+                'precipitation_in': puw_precip,
+                'snow_depth_in': puw_snow,
+                'cloud_cover_pct': puw_cloud,
+                'pressure_mb': puw_pressure,
+                'humidity_pct': puw_humidity,
+                'conditions': puw_conditions
             }
 
         if has_origin and origin_airport:
@@ -917,7 +933,14 @@ class HistoryDatabase:
                 'wind_speed_knots': origin_wind,
                 'wind_direction': origin_wind_dir,
                 'temperature_f': origin_temp,
-                'weather_code': origin_code
+                'weather_code': origin_code,
+                'wind_gust_knots': origin_gust,
+                'precipitation_in': origin_precip,
+                'snow_depth_in': origin_snow,
+                'cloud_cover_pct': origin_cloud,
+                'pressure_mb': origin_pressure,
+                'humidity_pct': origin_humidity,
+                'conditions': origin_conditions
             }
 
         if has_dest and dest_airport:
@@ -926,7 +949,14 @@ class HistoryDatabase:
                 'wind_speed_knots': dest_wind,
                 'wind_direction': dest_wind_dir,
                 'temperature_f': dest_temp,
-                'weather_code': dest_code
+                'weather_code': dest_code,
+                'wind_gust_knots': dest_gust,
+                'precipitation_in': dest_precip,
+                'snow_depth_in': dest_snow,
+                'cloud_cover_pct': dest_cloud,
+                'pressure_mb': dest_pressure,
+                'humidity_pct': dest_humidity,
+                'conditions': dest_conditions
             }
 
         return result if result else None
