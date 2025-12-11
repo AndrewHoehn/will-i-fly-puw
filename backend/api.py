@@ -722,6 +722,223 @@ async def get_bts_monthly_statistics():
         logger.error(f"Error fetching BTS statistics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/admin/stats")
+async def get_admin_stats():
+    """
+    Admin endpoint - Returns comprehensive database statistics and health metrics.
+    Easter egg endpoint for database inspection.
+    """
+    try:
+        conn = fd.history_db._get_conn()
+        cursor = conn.cursor()
+
+        # Total flights
+        cursor.execute("SELECT COUNT(*) FROM historical_flights")
+        total_flights = cursor.fetchone()[0]
+
+        # Flights with complete multi-airport weather
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE puw_visibility_miles IS NOT NULL
+            AND origin_visibility_miles IS NOT NULL
+            AND dest_visibility_miles IS NOT NULL
+        """)
+        complete_weather = cursor.fetchone()[0]
+
+        # Flights missing weather data
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE puw_visibility_miles IS NULL
+            OR origin_visibility_miles IS NULL
+            OR dest_visibility_miles IS NULL
+        """)
+        missing_weather = cursor.fetchone()[0]
+
+        # Cancelled vs completed flights
+        cursor.execute("SELECT COUNT(*) FROM historical_flights WHERE is_cancelled = 1")
+        cancelled = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM historical_flights WHERE is_cancelled = 0")
+        completed = cursor.fetchone()[0]
+
+        # Date range
+        cursor.execute("SELECT MIN(flight_date), MAX(flight_date) FROM historical_flights")
+        date_range = cursor.fetchone()
+
+        # Weather condition breakdown (flights with multi-airport weather)
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE puw_visibility_miles IS NOT NULL
+            AND puw_visibility_miles < 1.0
+        """)
+        low_vis_puw = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE puw_visibility_miles IS NOT NULL
+            AND puw_wind_speed_knots > 30
+        """)
+        high_wind_puw = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE puw_temp_f IS NOT NULL
+            AND puw_temp_f < 32
+        """)
+        freezing_puw = cursor.fetchone()[0]
+
+        # Origin airport weather breakdown
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE origin_visibility_miles IS NOT NULL
+            AND origin_visibility_miles < 1.0
+        """)
+        low_vis_origin = cursor.fetchone()[0]
+
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE origin_wind_speed_knots IS NOT NULL
+            AND origin_wind_speed_knots > 30
+        """)
+        high_wind_origin = cursor.fetchone()[0]
+
+        # Destination airport weather breakdown
+        cursor.execute("""
+            SELECT COUNT(*) FROM historical_flights
+            WHERE dest_visibility_miles IS NOT NULL
+            AND dest_visibility_miles < 1.0
+        """)
+        low_vis_dest = cursor.fetchone()[0]
+
+        # Flights by route
+        cursor.execute("""
+            SELECT origin_airport, dest_airport, COUNT(*) as count
+            FROM historical_flights
+            GROUP BY origin_airport, dest_airport
+            ORDER BY count DESC
+        """)
+        routes = cursor.fetchall()
+
+        conn.close()
+
+        return {
+            "database_stats": {
+                "total_flights": total_flights,
+                "complete_weather_data": complete_weather,
+                "missing_weather_data": missing_weather,
+                "completion_percentage": round((complete_weather / total_flights * 100) if total_flights > 0 else 0, 2),
+                "cancelled_flights": cancelled,
+                "completed_flights": completed,
+                "cancellation_rate": round((cancelled / total_flights * 100) if total_flights > 0 else 0, 2),
+                "date_range": {
+                    "earliest": date_range[0] if date_range[0] else None,
+                    "latest": date_range[1] if date_range[1] else None
+                }
+            },
+            "weather_conditions": {
+                "puw": {
+                    "low_visibility": low_vis_puw,
+                    "high_winds": high_wind_puw,
+                    "freezing_temps": freezing_puw
+                },
+                "origin_airports": {
+                    "low_visibility": low_vis_origin,
+                    "high_winds": high_wind_origin
+                },
+                "destination_airports": {
+                    "low_visibility": low_vis_dest
+                }
+            },
+            "routes": [
+                {
+                    "origin": r[0],
+                    "destination": r[1],
+                    "flights": r[2]
+                }
+                for r in routes
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error fetching admin stats: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/admin/database")
+async def get_full_database(limit: int = 1000, offset: int = 0):
+    """
+    Admin endpoint - Returns paginated full database with all weather data.
+    Shows multi-airport weather if backfilled.
+    """
+    try:
+        conn = fd.history_db._get_conn()
+        cursor = conn.cursor()
+
+        # Get total count
+        cursor.execute("SELECT COUNT(*) FROM historical_flights")
+        total = cursor.fetchone()[0]
+
+        # Get paginated data with ALL columns
+        cursor.execute("""
+            SELECT
+                flight_number, flight_date, is_cancelled,
+                origin_airport, dest_airport,
+                puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction,
+                puw_temp_f, puw_weather_code,
+                origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction,
+                origin_temp_f, origin_weather_code,
+                dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction,
+                dest_temp_f, dest_weather_code
+            FROM historical_flights
+            ORDER BY flight_date DESC
+            LIMIT ? OFFSET ?
+        """, (limit, offset))
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        flights = []
+        for row in rows:
+            flight = {
+                "flight_number": row[0],
+                "flight_date": row[1],
+                "is_cancelled": bool(row[2]),
+                "origin_airport": row[3],
+                "dest_airport": row[4],
+                "multi_airport_weather": {
+                    "KPUW": {
+                        "visibility_miles": row[5],
+                        "wind_speed_knots": row[6],
+                        "wind_direction": row[7],
+                        "temperature_f": row[8],
+                        "weather_code": row[9]
+                    } if row[5] is not None else None,
+                    row[3]: {
+                        "visibility_miles": row[10],
+                        "wind_speed_knots": row[11],
+                        "wind_direction": row[12],
+                        "temperature_f": row[13],
+                        "weather_code": row[14]
+                    } if row[10] is not None and row[3] else None,
+                    row[4]: {
+                        "visibility_miles": row[15],
+                        "wind_speed_knots": row[16],
+                        "wind_direction": row[17],
+                        "temperature_f": row[18],
+                        "weather_code": row[19]
+                    } if row[15] is not None and row[4] else None
+                }
+            }
+            flights.append(flight)
+
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "flights": flights
+        }
+    except Exception as e:
+        logger.error(f"Error fetching full database: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Mount Static Files (Frontend)
 # Must be after API routes to avoid conflict
 frontend_dist = os.path.join(os.path.dirname(__file__), "../frontend/dist")
