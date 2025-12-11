@@ -299,28 +299,28 @@ def process_flights():
         prediction_grade = None # For Scorecard
         multi_airport_weather = None
 
+        # Extract multi-airport weather from weather_map (for both future AND historical)
+        puw_weather = w_cond if w_cond else {}
+        origin_weather = {}
+        dest_weather = {}
+
+        # Get weather from airports dict if available
+        if w_cond and 'airports' in w_cond:
+            airports_weather = w_cond['airports']
+            puw_weather = airports_weather.get('KPUW', w_cond)  # Fallback to w_cond for backward compat
+
+            # Get origin/destination weather
+            origin_code = f_out.get('origin')
+            dest_code = f_out.get('destination')
+
+            if origin_code and origin_code in airports_weather:
+                origin_weather = airports_weather[origin_code]
+
+            if dest_code and dest_code in airports_weather:
+                dest_weather = airports_weather[dest_code]
+
         if local_dt > now_local:
             # Future: Calculate Fresh Risk with Multi-Airport Weather
-            # Extract multi-airport weather from weather_map
-            puw_weather = w_cond if w_cond else {}
-            origin_weather = {}
-            dest_weather = {}
-
-            # Get weather from airports dict if available
-            if w_cond and 'airports' in w_cond:
-                airports_weather = w_cond['airports']
-                puw_weather = airports_weather.get('KPUW', w_cond)  # Fallback to w_cond for backward compat
-
-                # Get origin/destination weather
-                origin_code = f_out.get('origin')
-                dest_code = f_out.get('destination')
-
-                if origin_code and origin_code in airports_weather:
-                    origin_weather = airports_weather[origin_code]
-
-                if dest_code and dest_code in airports_weather:
-                    dest_weather = airports_weather[dest_code]
-
             # Use multi-airport risk calculation
             risk_obj = pe.calculate_risk_multi_airport(f_out, puw_weather, origin_weather, dest_weather)
 
@@ -442,9 +442,36 @@ def process_flights():
                 if status_display.lower() in ['cancelled', 'canceled']:
                     yesterday_cancelled += 1
 
-            # Log History (Self-Grading)
-            risk_for_log = pe.calculate_risk(f_out, w_cond)
-            fd.log_flight_outcome(f_out, w_cond, risk_for_log)
+            # Log History with Multi-Airport Weather (Self-Grading)
+            # Calculate risk using multi-airport weather (same as future flights)
+            risk_for_log = pe.calculate_risk_multi_airport(f_out, puw_weather, origin_weather, dest_weather)
+
+            # Log prediction to history_log table (for scorecard)
+            fd.history_db.log_prediction(f_out, w_cond, risk_for_log)
+
+            # Log multi-airport weather to historical_flights table
+            # This ensures Recent History can display multi-airport weather
+            flight_date_str = f_out.get('scheduled_time')[:10] if f_out.get('scheduled_time') else None
+            if flight_date_str and (puw_weather or origin_weather or dest_weather):
+                # Convert weather dicts to match expected format (temp_f instead of temperature_f)
+                def prepare_weather(weather_dict):
+                    if not weather_dict:
+                        return {}
+                    w = weather_dict.copy()
+                    if 'temperature_f' in w:
+                        w['temp_f'] = w.pop('temperature_f')
+                    return w
+
+                fd.history_db.add_flight_multi_weather({
+                    'flight_number': f_out.get('number'),
+                    'flight_date': flight_date_str,
+                    'is_cancelled': effective_status in ['cancelled', 'canceled'],
+                    'origin_airport': f_out.get('origin'),
+                    'dest_airport': f_out.get('destination'),
+                    'puw_weather': prepare_weather(puw_weather),
+                    'origin_weather': prepare_weather(origin_weather),
+                    'dest_weather': prepare_weather(dest_weather)
+                })
                     
         elif local_dt <= tomorrow_end:
             processed_future.append(resp_item)
