@@ -37,27 +37,43 @@ export function HowItWorksPage({ historyRange }) {
 
           <div style={{ marginBottom: '20px' }}>
             <h4 style={{ margin: '0 0 8px 0', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-              2. Multi-Airport Weather Conditions
+              2. Comprehensive Multi-Airport Weather Analysis
             </h4>
             <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-              We analyze weather at <strong>three airports</strong>: Pullman (PUW), Seattle (SEA), and Boise (BOI). This captures conditions at your departure and arrival airports, not just PUW. For example, fog at Seattle can delay inbound flights even if Pullman weather is perfect.
+              We use a <strong>hybrid weather approach</strong>: <strong>NOAA Aviation Weather METAR</strong> for current conditions (actual observations from airport weather stations) and <strong>Open-Meteo</strong> for forecasts. This ensures current flights use real observed data (e.g., actual 1.5mi visibility) instead of model forecasts (which might show 24mi incorrectly).
             </p>
             <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-              Weather scoring includes:
+              We collect <strong>13 weather parameters</strong> from <strong>three airports</strong> (Pullman, Seattle, Boise). This captures conditions at your departure and arrival airports, not just PUW. For example, fog at Seattle can delay inbound flights even if Pullman weather is perfect.
+            </p>
+            <p style={{ margin: '0 0 8px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
+              <strong>Complete Weather Data per Airport:</strong>
+            </p>
+            <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.85rem', lineHeight: '1.7' }}>
+              <li>Visibility, Wind Speed, <strong>Wind Gusts</strong>, Wind Direction</li>
+              <li>Temperature, Precipitation, Snow Depth</li>
+              <li>Cloud Cover, Atmospheric Pressure, Humidity</li>
+              <li>Weather Conditions (text description)</li>
+            </ul>
+            <p style={{ margin: '0 0 8px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
+              <strong>Advanced Scoring (per airport):</strong>
             </p>
             <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.8' }}>
-              <li><strong>Visibility</strong>: Critical if &lt;0.5mi (+60 points), Low if &lt;1mi (+40 points), Reduced if &lt;3mi (+15 points)</li>
-              <li><strong>Runway-Specific Crosswinds</strong>: Calculated for each airport's active runways (PUW: 05/23, SEA: 16L/34R, BOI: 10L/28R). Strong crosswinds (+30-50 points) make landing difficult</li>
-              <li><strong>Temperature + Precipitation</strong>: Freezing temps with precipitation (+25 points) create icing conditions</li>
-              <li><strong>High winds</strong>: Overall wind speed &gt;40 knots adds significant risk</li>
-              <li><strong>Origin/Destination Weighting</strong>: For arrivals, origin airport weather is weighted at 70%. For departures, destination airport weather is weighted at 60%</li>
+              <li><strong>Visibility</strong>: Critical &lt;0.5mi (+60 pts), Low &lt;1mi (+40 pts), Reduced &lt;3mi (+15 pts)</li>
+              <li><strong>Crosswind Component</strong>: Calculated using <strong>wind gusts</strong> (prioritized) and runway headings. >25kn: +50 pts, >15kn: +30 pts</li>
+              <li><strong>Snow Depth</strong>: >6" (+40 pts major contamination), >3" (+25 pts), >1" (+15 pts)</li>
+              <li><strong>Active Precipitation</strong>: Freezing precip >0.3" (+30 pts), rain >0.5" (+15 pts)</li>
+              <li><strong>Icing Risk</strong>: Temp &lt;32°F + Humidity >80% + Precipitation (+20 pts)</li>
+              <li><strong>IFR Conditions</strong>: Cloud cover >90% + visibility &lt;5mi (+10 pts)</li>
             </ul>
+            <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
+              <strong>Weather Weighting:</strong> PUW is always scored at 100%. For arrivals, origin weather is weighted at 70% (can't depart = no arrival). For departures, destination weather is weighted at 60% (can't land = no departure).
+            </p>
             <div style={{ padding: '12px', background: 'rgba(100, 116, 139, 0.1)', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              puw_score = visibility_penalty + crosswind_penalty +<br />
-              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;icing_penalty + wind_penalty<br />
+              puw_score = visibility + crosswind + snow_depth +<br />
+              &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;precipitation + icing + ifr_conditions<br />
               <br />
-              origin_score = (origin_weather_score × 0.7) // for arrivals<br />
-              dest_score = (dest_weather_score × 0.6) // for departures<br />
+              origin_score = (origin_weather_score × 0.7) // arrivals<br />
+              dest_score = (dest_weather_score × 0.6)   // departures<br />
               <br />
               weather_score = puw_score + origin_score + dest_score
             </div>
@@ -65,15 +81,33 @@ export function HowItWorksPage({ historyRange }) {
 
           <div style={{ marginBottom: '0' }}>
             <h4 style={{ margin: '0 0 8px 0', color: 'var(--text-primary)', fontSize: '0.95rem' }}>
-              3. Multi-Airport Historical Pattern Matching
+              3. Comprehensive Multi-Airport Historical Pattern Matching
             </h4>
             <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-              We query our database of {historyRange?.total_flights || '1,300+'} past flights to find similar <strong>multi-airport conditions</strong> - matching visibility, winds, and temperatures at PUW and the relevant origin/destination airport. If we find 5+ matching flights, we use their actual cancellation rate as an adjustment factor. This captures real-world outcomes when, for example, both PUW and Seattle had low visibility simultaneously.
+              We query our database of {historyRange?.total_flights || '1,300+'} past flights to find similar <strong>comprehensive multi-airport weather patterns</strong>. This isn't just matching temperature - we're comparing wind gusts, snow depth, precipitation, and visibility at both PUW and the relevant origin/destination airport.
+            </p>
+            <p style={{ margin: '0 0 8px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
+              <strong>Pattern Matching Criteria:</strong>
+            </p>
+            <ul style={{ margin: '0 0 12px 0', paddingLeft: '20px', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.8' }}>
+              <li><strong>Wind Matching</strong>: Checks wind gusts (prioritized) OR sustained winds within ±5 knots</li>
+              <li><strong>Snow Depth</strong>: Within ±2 inches (runway contamination similarity)</li>
+              <li><strong>Precipitation</strong>: Within ±0.1 inches (active freezing precip events)</li>
+              <li><strong>Visibility</strong>: Within ±0.5 miles (low-vis operations)</li>
+              <li><strong>Multi-Airport Correlation</strong>: Matches conditions at PUW AND origin/destination simultaneously</li>
+            </ul>
+            <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
+              <strong>Dual Independent Signals:</strong> We look for ≥10 PUW matches and ≥5 origin/destination matches. These signals are averaged together and blended 50/50 with the weather-based score. This captures real outcomes like "What happened when both PUW and Seattle had snow on the ground?" or "When Boise had 25kn gusts AND PUW had low visibility, what was the cancellation rate?"
+            </p>
+            <p style={{ margin: '0 0 12px 0', color: 'var(--text-secondary)', fontSize: '0.85rem', fontStyle: 'italic', lineHeight: '1.6' }}>
+              Historical weather was backfilled using Visual Crossing API ($0.23 total cost). Ongoing data collection uses the free Open-Meteo API.
             </p>
             <div style={{ padding: '12px', background: 'rgba(100, 116, 139, 0.1)', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-              historical_adjustment =<br />
-              &nbsp;&nbsp;(actual_cancellation_rate(similar_multi_airport_conditions)<br />
-              &nbsp;&nbsp;&nbsp;+ current_calculated_score) / 2 - current_score
+              puw_historical = actual_rate(≥10 similar PUW conditions)<br />
+              other_historical = actual_rate(≥5 similar origin/dest conditions)<br />
+              <br />
+              historical_avg = (puw_historical + other_historical) / 2<br />
+              historical_adjustment = (historical_avg + current_score) / 2 - current_score
             </div>
           </div>
         </div>

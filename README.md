@@ -147,37 +147,75 @@ Monthly cancellation rates based on 5 years of [BTS Data (2020-2025)](https://ww
 - **Summer** (Jun-Aug): <1% baseline
 - **Fall** (Sep-Nov): 0-2% baseline
 
-### 2. Multi-Airport Weather Analysis
-The system fetches weather from three airports in parallel and scores each independently:
+### 2. Comprehensive Multi-Airport Weather Analysis
+The system uses a **hybrid weather approach** combining actual observations with forecasts:
 
-**Weather Factors per Airport:**
+**Data Sources:**
+- **Current Conditions**: NOAA Aviation Weather METAR (actual observations from airport weather stations)
+- **Forecasts**: Open-Meteo API (model-based forecasts for 10-day outlook)
+
+This hybrid approach ensures current flight conditions use real observed data (e.g., actual 1.5mi visibility) instead of model forecasts (which might incorrectly show 24mi), while maintaining 10-day forecast capability.
+
+The system collects **13 weather parameters** from three airports in parallel:
+
+**Complete Weather Data per Airport:**
+- **Visibility** (miles) - Critical for VFR/IFR operations
+- **Wind Speed** (knots) - Sustained winds
+- **Wind Gusts** (knots) - **Prioritized over sustained winds** for takeoff/landing safety
+- **Wind Direction** (degrees) - Used for runway-specific crosswind calculations
+- **Temperature** (°F) - Icing and density altitude risk
+- **Precipitation** (inches) - Active rain/snow amount
+- **Snow Depth** (inches) - Runway contamination assessment
+- **Cloud Cover** (%) - VFR ceiling requirements
+- **Atmospheric Pressure** (millibars) - Altimeter settings
+- **Humidity** (%) - Icing/fog risk assessment
+- **Weather Conditions** (text) - Human-readable description
+- **Weather Code** (WMO) - Standardized meteorological code
+
+**Advanced Scoring Logic:**
 - **Visibility**: Critical (<0.5mi = +60 pts), Low (<1mi = +40 pts), Reduced (<3mi = +15 pts)
-- **Runway-Specific Crosswinds**:
+- **Crosswind Component** (runway-specific):
   - PUW: Runway 05/23 (050°/230°)
-  - SEA: Runways 16L/34R, 16C/34C (160°/340°, 170°/350°)
+  - SEA: Runways 16L/34R, 16C/34C, 16R/34L (160°/340°, 170°/350°)
   - BOI: Runways 10L/28R, 10R/28L (100°/280°, 120°/300°)
-  - Strong crosswinds: +30-50 pts based on severity
-- **Temperature**: Icing conditions when <32°F with precipitation (+25 pts)
-- **Wind Speed**: Total wind speed >40 knots adds significant risk
+  - Uses **wind gusts** preferentially for calculations
+  - >25kn crosswind: +50 pts, >15kn: +30 pts, >10kn: +10 pts
+- **Snow Depth**: >6": +40 pts (major contamination), >3": +25 pts, >1": +15 pts
+- **Active Precipitation**:
+  - Freezing (temp <32°F): Heavy (>0.3"): +30 pts, Moderate (>0.1"): +20 pts
+  - Rain: Heavy (>0.5"): +15 pts, Moderate (>0.1"): +8 pts
+- **IFR Conditions**: Cloud cover >90% + visibility <5mi: +10 pts
+- **Icing Risk**: Temp <32°F + Humidity >80% + Precipitation: +20 pts
 
 **Weather Weighting:**
 - **PUW Weather**: Always scored at 100% (affects all flights)
 - **Origin Airport Weather**: Weighted at 70% for arrivals (delays inbound aircraft)
 - **Destination Airport Weather**: Weighted at 60% for departures (can close destination)
 
-Example: For a SEA→PUW arrival, Seattle fog gets 70% weight because it affects the inbound aircraft.
+Example: For a SEA→PUW arrival during Seattle fog with snow, the system scores Seattle's low visibility (0.8mi) + snow depth (4.2") at 70% weight because the aircraft can't depart.
 
-### 3. Multi-Airport Historical Pattern Matching
-Queries similar **multi-airport conditions** from historical flights in DB:
-- Matches visibility ranges at both PUW and origin/destination airport
-- Matches wind thresholds at both airports
-- Matches freezing temperature patterns at both airports
-- Returns actual cancellation rates when similar conditions occurred simultaneously
-- Requires 5+ matching flights (vs 20+ for single-airport matching)
+### 3. Comprehensive Multi-Airport Historical Pattern Matching
+The system performs sophisticated pattern matching using **all comprehensive weather fields** from 1,172+ historical flights:
 
-This captures real-world scenarios like: "What happened when both PUW and Seattle had <1mi visibility?"
+**Pattern Matching Logic:**
+- **Wind Matching**: Checks **wind gusts** OR sustained winds (±5 knots tolerance)
+- **Snow Depth Matching**: ±2 inches tolerance for similar runway contamination
+- **Precipitation Matching**: ±0.1 inches tolerance for freezing precip events
+- **Visibility Matching**: ±0.5 miles tolerance for low-vis operations
+- **Multi-Airport Correlation**: Matches conditions at PUW AND origin/destination simultaneously
 
-**Note:** AeroDataBox gives access to 180 days of historical flight data on its $5.35 USD/mo plan, which provides the foundation for this historical matching.
+**Independent Historical Signals:**
+1. **PUW Historical Match**: Finds flights with similar PUW conditions (requires ≥10 matches)
+2. **Origin/Dest Historical Match**: Finds flights with similar remote airport conditions (requires ≥5 matches)
+
+These signals are **averaged together** and blended 50/50 with the weather-based score.
+
+**Real-World Examples Captured:**
+- "What happened when both PUW and Seattle had snow on the ground?"
+- "When Seattle had 25kn gusts AND PUW had low visibility, what was the cancellation rate?"
+- "When Boise had freezing precipitation, how often did departures cancel?"
+
+**Data Source:** Historical weather backfilled using Visual Crossing API ($0.23 total cost). Ongoing data uses free Open-Meteo API.
 
 ### Risk Score Formula
 ```
@@ -209,17 +247,28 @@ aircraft_reg, aircraft_model, last_updated
 ```
 
 ### historical_flights
-Long-term flight history for predictions with multi-airport weather
+Long-term flight history for predictions with comprehensive multi-airport weather (47 columns total)
 ```sql
 id, flight_number, flight_date, is_cancelled, origin_airport, dest_airport,
 
 -- Legacy single-airport weather (backward compatible)
 visibility_miles, wind_speed_knots, temp_f, snowfall_cm, weather_code,
 
--- Multi-airport weather columns
+-- Comprehensive multi-airport weather (13 fields × 3 airports = 39 columns)
+-- PUW Weather (Pullman)
 puw_visibility_miles, puw_wind_speed_knots, puw_wind_direction, puw_temp_f, puw_weather_code,
+puw_wind_gust_knots, puw_precipitation_in, puw_snow_depth_in,
+puw_cloud_cover_pct, puw_pressure_mb, puw_humidity_pct, puw_conditions,
+
+-- Origin Weather (SEA/BOI)
 origin_visibility_miles, origin_wind_speed_knots, origin_wind_direction, origin_temp_f, origin_weather_code,
-dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code
+origin_wind_gust_knots, origin_precipitation_in, origin_snow_depth_in,
+origin_cloud_cover_pct, origin_pressure_mb, origin_humidity_pct, origin_conditions,
+
+-- Destination Weather (SEA/BOI)
+dest_visibility_miles, dest_wind_speed_knots, dest_wind_direction, dest_temp_f, dest_weather_code,
+dest_wind_gust_knots, dest_precipitation_in, dest_snow_depth_in,
+dest_cloud_cover_pct, dest_pressure_mb, dest_humidity_pct, dest_conditions
 ```
 
 ### bts_monthly_stats
@@ -690,8 +739,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🙏 Acknowledgments
 
+- **NOAA Aviation Weather** - METAR observations for current conditions
 - **AeroDataBox** - Flight data API
 - **AviationStack** - Backup flight status verification
-- **Open-Meteo** - Weather data API
+- **Open-Meteo** - Weather forecast API
+- **Visual Crossing** - Historical weather backfill
 - **Lucide React** - Icon library
 - **Framer Motion** - Animation library
