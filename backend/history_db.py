@@ -966,3 +966,23 @@ class HistoryDatabase:
             }
 
         return result if result else None
+
+    def update_flight_cancellation_status(self, flight_number, flight_date, is_cancelled):
+        """
+        Update the is_cancelled status for a historical flight.
+
+        Args:
+            flight_number: Flight number (e.g., "AS 2132")
+            flight_date: Flight date (YYYY-MM-DD format)
+            is_cancelled: Boolean indicating if flight is cancelled
+        """
+        try:
+            with self._get_conn() as conn:
+                conn.execute("""
+                    UPDATE historical_flights
+                    SET is_cancelled = ?
+                    WHERE flight_number = ? AND substr(flight_date, 1, 10) = ?
+                """, (1 if is_cancelled else 0, flight_number, flight_date))
+                logger.debug(f"Updated cancellation status for {flight_number} on {flight_date}")
+        except Exception as e:
+            logger.error(f"Failed to update cancellation status: {e}")
