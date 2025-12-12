@@ -342,6 +342,10 @@ def process_flights():
             # Use multi-airport risk calculation
             risk_obj = pe.calculate_risk_multi_airport(f_out, puw_weather, origin_weather, dest_weather)
 
+            # Log the PREDICTION immediately (while we have fresh weather data)
+            # This is critical for learning - we need to log what we predicted BEFORE we know the outcome
+            fd.history_db.log_prediction(f_out, w_cond, risk_obj)
+
             # Log multi-airport weather to historical_flights table NOW (while we have the weather data)
             # This ensures that when the flight becomes historical, we already have the weather stored
             flight_date_str = f_out.get('scheduled_time')[:10] if f_out.get('scheduled_time') else None
@@ -495,41 +499,12 @@ def process_flights():
                 if status_display.lower() in ['cancelled', 'canceled']:
                     yesterday_cancelled += 1
 
-            # Log History (Self-Grading)
-            # Note: Multi-airport weather was already logged when this was a future flight
-            # We just need to log the prediction for scorecard purposes
-
-            # For historical flights, we might not have weather in weather_map anymore
-            # So we retrieve it from the database instead
-            historical_weather_data = fd.history_db.get_flight_multi_airport_weather(
-                f_out.get('number'),
-                f_out.get('scheduled_time')
-            )
-
-            # Reconstruct weather dicts for risk calculation if we have historical data
-            if historical_weather_data:
-                hist_puw = historical_weather_data.get('KPUW', {})
-                hist_origin = historical_weather_data.get(f_out.get('origin'), {})
-                hist_dest = historical_weather_data.get(f_out.get('destination'), {})
-
-                # Use historical weather for risk calculation
-                risk_for_log = pe.calculate_risk_multi_airport(f_out, hist_puw, hist_origin, hist_dest)
-
-                # Build w_cond for history_log from historical PUW weather
-                w_cond_for_log = {
-                    'visibility_miles': hist_puw.get('visibility_miles'),
-                    'wind_speed_knots': hist_puw.get('wind_speed_knots'),
-                    'temperature_f': hist_puw.get('temperature_f')
-                }
-            else:
-                # Fallback: calculate with whatever weather we have (might be empty)
-                risk_for_log = pe.calculate_risk_multi_airport(f_out, puw_weather, origin_weather, dest_weather)
-                w_cond_for_log = w_cond
-
-            # Log prediction to history_log table (for scorecard)
-            fd.history_db.log_prediction(f_out, w_cond_for_log, risk_for_log)
+            # Update Historical Flight Outcome
+            # NOTE: The prediction was already logged when this was a future flight
+            # We only need to update the actual outcome (cancellation status) now
 
             # Update the is_cancelled status in historical_flights if the flight is now cancelled
+            # This links our prediction (made when future) to the actual outcome
             if effective_status in ['cancelled', 'canceled']:
                 fd.history_db.update_flight_cancellation_status(
                     f_out.get('number'),
