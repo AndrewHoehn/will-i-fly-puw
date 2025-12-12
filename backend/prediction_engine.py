@@ -586,7 +586,7 @@ class PredictionEngine:
                 parts.append(f"Reduced visibility ({vis:.1f}mi)")
 
         # Wind (prefer gusts if available)
-        if wind_gust is not None and wind_gust > 20:
+        if wind_gust is not None and wind_gust > 20 and wind is not None:
             parts.append(f"Gusty winds ({wind:.0f}kt gusting {wind_gust:.0f}kt)")
         elif wind is not None and wind > 20:
             parts.append(f"High wind ({wind:.0f}kt)")
