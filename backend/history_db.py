@@ -270,9 +270,10 @@ class HistoryDatabase:
             today = datetime.now().strftime("%Y-%m-%d")
 
             c.execute("""
-                SELECT COUNT(*), SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END)
+                SELECT COUNT(DISTINCT flight_number || '-' || substr(flight_date, 1, 10)),
+                       SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END)
                 FROM historical_flights
-                WHERE flight_date >= ? AND flight_date <= ?
+                WHERE substr(flight_date, 1, 10) >= ? AND substr(flight_date, 1, 10) <= ?
             """, (cutoff, today))
 
             row = c.fetchone()
