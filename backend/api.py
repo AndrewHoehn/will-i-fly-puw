@@ -829,6 +829,77 @@ async def get_calibration_metrics():
         logger.error(f"Error computing calibration metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/metrics/calibration/status")
+async def get_calibration_status():
+    """
+    Returns current calibration factor and how it's computed.
+    Shows the system's self-learning status.
+    """
+    try:
+        try:
+            from .prediction_engine import PredictionEngine
+        except ImportError:
+            from prediction_engine import PredictionEngine
+
+        # Create engine to compute current calibration
+        engine = PredictionEngine()
+        current_factor = engine.calibration_factor
+
+        # Get the data that informed this calibration
+        conn = engine.history_db._get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                AVG(hl.predicted_risk) as avg_predicted,
+                SUM(CASE WHEN hf.is_cancelled = 1 THEN 1 ELSE 0 END) as actual_cancelled
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+            WHERE hl.predicted_risk IS NOT NULL
+        """)
+
+        row = cursor.fetchone()
+        total, avg_predicted, actual_cancelled = row if row else (0, 0, 0)
+
+        actual_rate = (actual_cancelled / total * 100) if total > 0 else 0
+        ideal_factor = (actual_rate / avg_predicted) if avg_predicted and avg_predicted > 0 else 0
+
+        conn.close()
+
+        return {
+            "calibration": {
+                "current_factor": round(current_factor, 3),
+                "status": "active" if total >= 30 else "learning",
+                "data_points": total,
+                "required_for_auto": 30
+            },
+            "performance": {
+                "avg_predicted_risk": round(avg_predicted, 1) if avg_predicted else 0,
+                "actual_cancellation_rate": round(actual_rate, 1),
+                "actual_cancellations": actual_cancelled,
+                "over_prediction_ratio": round(avg_predicted / actual_rate, 1) if actual_rate > 0 else None
+            },
+            "adjustment": {
+                "ideal_factor": round(ideal_factor, 3) if ideal_factor > 0 else None,
+                "current_factor": round(current_factor, 3),
+                "conservative_margin": round((current_factor - ideal_factor) * 100, 1) if ideal_factor > 0 else None,
+                "explanation": "Current factor includes safety margin to prevent under-prediction"
+            },
+            "effect": {
+                "example_raw_score": 20,
+                "example_calibrated_score": round(20 * current_factor, 1),
+                "reduction_pct": round((1 - current_factor) * 100, 0)
+            },
+            "generated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting calibration status: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/monthly-stats")
 async def get_monthly_statistics():
     """

@@ -39,15 +39,89 @@ class PredictionEngine:
         }
         self.history_db = HistoryDatabase()
 
-        # Calibration factor: Learned from comparing predictions to actual outcomes
-        # This is computed from /api/metrics/calibration data
-        # Current data (96 predictions): avg_predicted=12.4%, actual=1.0%
-        # We're over-predicting by 12.4x
-        # Conservative calibration: scale by 0.5 (still 6x safety margin)
-        self.calibration_factor = 0.5
+        # Dynamic calibration: Automatically computed from actual performance
+        # Falls back to conservative default if insufficient data
+        self.calibration_factor = self._compute_calibration_factor()
 
     def get_seasonal_baseline(self, date_obj):
         return self.seasonal_baselines.get(date_obj.month, 5)
+
+    def _compute_calibration_factor(self):
+        """
+        Dynamically compute calibration factor from historical performance.
+
+        This method analyzes past predictions vs actual outcomes to determine
+        how much we should adjust current predictions. The system automatically
+        adapts as more data becomes available.
+
+        Returns:
+            float: Calibration factor (0.0-1.0), or default conservative value
+        """
+        try:
+            conn = self.history_db._get_conn()
+            cursor = conn.cursor()
+
+            # Get predictions with known outcomes
+            cursor.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    AVG(hl.predicted_risk) as avg_predicted,
+                    SUM(CASE WHEN hf.is_cancelled = 1 THEN 1 ELSE 0 END) as actual_cancelled
+                FROM history_log hl
+                JOIN historical_flights hf
+                    ON hl.number = hf.flight_number
+                    AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+                WHERE hl.predicted_risk IS NOT NULL
+            """)
+
+            row = cursor.fetchone()
+            conn.close()
+
+            if not row or row[0] is None:
+                # No data available - use conservative default
+                return 0.5
+
+            total, avg_predicted, actual_cancelled = row
+
+            # Need at least 30 predictions for reliable calibration
+            if total < 30:
+                return 0.5  # Conservative default
+
+            # Calculate actual cancellation rate
+            actual_rate = (actual_cancelled / total) * 100 if total > 0 else 0
+
+            # If we have no actual cancellations, be very conservative
+            if actual_cancelled == 0:
+                # We're over-predicting, but don't know by how much
+                # Scale down significantly but not too aggressively
+                return 0.3
+
+            # Calculate ideal calibration factor
+            # If avg_predicted = 12% and actual_rate = 1%, factor = 1/12 ≈ 0.083
+            if avg_predicted > 0:
+                ideal_factor = actual_rate / avg_predicted
+            else:
+                return 0.5
+
+            # Apply bounds to prevent extreme adjustments
+            # Minimum: 0.1 (don't scale down more than 90%)
+            # Maximum: 2.0 (don't scale up more than 2x)
+            calibration_factor = max(0.1, min(2.0, ideal_factor))
+
+            # Add safety margin: Never go below actual rate
+            # If we're currently over-predicting, be conservative
+            if calibration_factor < 0.5:
+                # Gradually approach the ideal, don't jump there immediately
+                # This prevents overcorrection from limited data
+                calibration_factor = 0.5 + (calibration_factor - 0.5) * 0.5
+
+            return calibration_factor
+
+        except Exception as e:
+            # If anything goes wrong, fall back to conservative default
+            import logging
+            logging.warning(f"Error computing calibration factor: {e}")
+            return 0.5
 
     def apply_calibration(self, raw_score):
         """
