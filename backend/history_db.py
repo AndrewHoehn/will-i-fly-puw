@@ -991,3 +991,232 @@ class HistoryDatabase:
                 logger.debug(f"Updated cancellation status for {flight_number} on {flight_date}")
         except Exception as e:
             logger.error(f"Failed to update cancellation status: {e}")
+
+    def analyze_feature_importance(self):
+        """
+        Analyze which weather factors correlate with actual flight cancellations.
+
+        Returns dict with:
+        - Feature correlations (visibility, wind, temp, etc.)
+        - Cancellation rates by condition thresholds
+        - Recommended scoring weights based on data
+        """
+        try:
+            with self._get_conn() as conn:
+                cursor = conn.cursor()
+
+                # Get all flights with weather data and outcomes
+                cursor.execute("""
+                    SELECT
+                        puw_visibility_miles, puw_wind_speed_knots, puw_wind_gust_knots,
+                        puw_temp_f, puw_precipitation_in, puw_snow_depth_in,
+                        puw_cloud_cover_pct, is_cancelled
+                    FROM historical_flights
+                    WHERE puw_visibility_miles IS NOT NULL
+                        AND substr(flight_date, 1, 10) <= date('now')
+                """)
+
+                flights = cursor.fetchall()
+                if len(flights) < 10:
+                    return {"error": "Insufficient data", "flights_analyzed": len(flights)}
+
+                total_flights = len(flights)
+                total_cancelled = sum(1 for f in flights if f[7] == 1)
+                baseline_rate = (total_cancelled / total_flights * 100) if total_flights > 0 else 0
+
+                # Analyze each feature
+                features = {
+                    "visibility": self._analyze_visibility_importance(flights, baseline_rate),
+                    "wind": self._analyze_wind_importance(flights, baseline_rate),
+                    "temperature": self._analyze_temperature_importance(flights, baseline_rate),
+                    "precipitation": self._analyze_precipitation_importance(flights, baseline_rate),
+                    "snow": self._analyze_snow_importance(flights, baseline_rate)
+                }
+
+                return {
+                    "total_flights": total_flights,
+                    "total_cancelled": total_cancelled,
+                    "baseline_cancellation_rate": round(baseline_rate, 2),
+                    "features": features,
+                    "recommendations": self._generate_recommendations(features, baseline_rate)
+                }
+
+        except Exception as e:
+            logger.error(f"Error analyzing feature importance: {e}")
+            return {"error": str(e)}
+
+    def _analyze_visibility_importance(self, flights, baseline_rate):
+        """Analyze visibility impact on cancellations."""
+        thresholds = [0.5, 1.0, 3.0, 5.0]
+        results = []
+
+        for threshold in thresholds:
+            matching = [f for f in flights if f[0] is not None and f[0] < threshold]
+            if len(matching) >= 5:
+                cancelled = sum(1 for f in matching if f[7] == 1)
+                rate = (cancelled / len(matching) * 100) if len(matching) > 0 else 0
+                lift = rate - baseline_rate
+
+                results.append({
+                    "condition": f"< {threshold} mi",
+                    "flights": len(matching),
+                    "cancelled": cancelled,
+                    "rate": round(rate, 1),
+                    "lift": round(lift, 1),
+                    "significance": "high" if abs(lift) > 5 else ("medium" if abs(lift) > 2 else "low")
+                })
+
+        return results
+
+    def _analyze_wind_importance(self, flights, baseline_rate):
+        """Analyze wind speed impact on cancellations."""
+        thresholds = [20, 30, 40]
+        results = []
+
+        for threshold in thresholds:
+            # Use gust if available, otherwise sustained wind
+            matching = [f for f in flights if (f[2] or f[1]) and (f[2] or f[1]) > threshold]
+            if len(matching) >= 5:
+                cancelled = sum(1 for f in matching if f[7] == 1)
+                rate = (cancelled / len(matching) * 100) if len(matching) > 0 else 0
+                lift = rate - baseline_rate
+
+                results.append({
+                    "condition": f"> {threshold} kt",
+                    "flights": len(matching),
+                    "cancelled": cancelled,
+                    "rate": round(rate, 1),
+                    "lift": round(lift, 1),
+                    "significance": "high" if abs(lift) > 5 else ("medium" if abs(lift) > 2 else "low")
+                })
+
+        return results
+
+    def _analyze_temperature_importance(self, flights, baseline_rate):
+        """Analyze temperature impact (especially freezing conditions)."""
+        results = []
+
+        # Freezing temps
+        matching = [f for f in flights if f[3] is not None and f[3] < 32]
+        if len(matching) >= 5:
+            cancelled = sum(1 for f in matching if f[7] == 1)
+            rate = (cancelled / len(matching) * 100) if len(matching) > 0 else 0
+            lift = rate - baseline_rate
+
+            results.append({
+                "condition": "< 32°F (freezing)",
+                "flights": len(matching),
+                "cancelled": cancelled,
+                "rate": round(rate, 1),
+                "lift": round(lift, 1),
+                "significance": "high" if abs(lift) > 5 else ("medium" if abs(lift) > 2 else "low")
+            })
+
+        # Freezing + precipitation (icing)
+        matching = [f for f in flights if f[3] is not None and f[3] < 32
+                   and f[4] is not None and f[4] > 0]
+        if len(matching) >= 5:
+            cancelled = sum(1 for f in matching if f[7] == 1)
+            rate = (cancelled / len(matching) * 100) if len(matching) > 0 else 0
+            lift = rate - baseline_rate
+
+            results.append({
+                "condition": "< 32°F + precip (icing)",
+                "flights": len(matching),
+                "cancelled": cancelled,
+                "rate": round(rate, 1),
+                "lift": round(lift, 1),
+                "significance": "high" if abs(lift) > 5 else ("medium" if abs(lift) > 2 else "low")
+            })
+
+        return results
+
+    def _analyze_precipitation_importance(self, flights, baseline_rate):
+        """Analyze precipitation impact."""
+        thresholds = [0.1, 0.3, 0.5]
+        results = []
+
+        for threshold in thresholds:
+            matching = [f for f in flights if f[4] is not None and f[4] > threshold]
+            if len(matching) >= 5:
+                cancelled = sum(1 for f in matching if f[7] == 1)
+                rate = (cancelled / len(matching) * 100) if len(matching) > 0 else 0
+                lift = rate - baseline_rate
+
+                results.append({
+                    "condition": f"> {threshold} in",
+                    "flights": len(matching),
+                    "cancelled": cancelled,
+                    "rate": round(rate, 1),
+                    "lift": round(lift, 1),
+                    "significance": "high" if abs(lift) > 5 else ("medium" if abs(lift) > 2 else "low")
+                })
+
+        return results
+
+    def _analyze_snow_importance(self, flights, baseline_rate):
+        """Analyze snow depth impact."""
+        thresholds = [1, 3, 6]
+        results = []
+
+        for threshold in thresholds:
+            matching = [f for f in flights if f[5] is not None and f[5] > threshold]
+            if len(matching) >= 5:
+                cancelled = sum(1 for f in matching if f[7] == 1)
+                rate = (cancelled / len(matching) * 100) if len(matching) > 0 else 0
+                lift = rate - baseline_rate
+
+                results.append({
+                    "condition": f"> {threshold} in",
+                    "flights": len(matching),
+                    "cancelled": cancelled,
+                    "rate": round(rate, 1),
+                    "lift": round(lift, 1),
+                    "significance": "high" if abs(lift) > 5 else ("medium" if abs(lift) > 2 else "low")
+                })
+
+        return results
+
+    def _generate_recommendations(self, features, baseline_rate):
+        """Generate recommendations based on feature analysis."""
+        recommendations = []
+
+        # Find high-impact features
+        for feature_name, conditions in features.items():
+            high_impact = [c for c in conditions if c.get('significance') == 'high']
+            if high_impact:
+                for condition in high_impact:
+                    if condition['lift'] > 5:
+                        recommendations.append({
+                            "feature": feature_name,
+                            "finding": f"{condition['condition']}: {condition['rate']}% cancel rate (+{condition['lift']}% above baseline)",
+                            "action": "Consider increasing weight in scoring algorithm",
+                            "data_quality": f"{condition['flights']} flights analyzed"
+                        })
+                    elif condition['lift'] < -5:
+                        recommendations.append({
+                            "feature": feature_name,
+                            "finding": f"{condition['condition']}: {condition['rate']}% cancel rate ({condition['lift']}% below baseline)",
+                            "action": "Current weight may be too high - consider reducing",
+                            "data_quality": f"{condition['flights']} flights analyzed"
+                        })
+
+        # Check for features with no impact
+        for feature_name, conditions in features.items():
+            if all(c.get('significance') == 'low' for c in conditions):
+                recommendations.append({
+                    "feature": feature_name,
+                    "finding": "No significant correlation with cancellations",
+                    "action": "Consider reducing weight or removing from scoring",
+                    "data_quality": f"Multiple thresholds analyzed"
+                })
+
+        if not recommendations:
+            recommendations.append({
+                "feature": "overall",
+                "finding": "No strong correlations found yet",
+                "action": "Continue collecting data - need more cancellation events for reliable analysis",
+                "data_quality": f"Baseline rate: {baseline_rate:.1f}%"
+            })
+
+        return recommendations

@@ -900,6 +900,187 @@ async def get_calibration_status():
         logger.error(f"Error getting calibration status: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/metrics/feature-importance")
+async def get_feature_importance():
+    """
+    Analyze which weather factors actually correlate with flight cancellations.
+
+    Returns:
+    - Cancellation rates for different weather conditions
+    - Feature importance scores (lift above baseline)
+    - Recommendations for weight adjustments
+    """
+    try:
+        try:
+            from .history_db import HistoryDatabase
+        except ImportError:
+            from history_db import HistoryDatabase
+
+        history_db = HistoryDatabase()
+        analysis = history_db.analyze_feature_importance()
+
+        return {
+            **analysis,
+            "generated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error analyzing feature importance: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/metrics/performance")
+async def get_performance_metrics():
+    """
+    Performance monitoring dashboard showing prediction accuracy over time.
+
+    Returns:
+    - Recent prediction accuracy (7/30 days)
+    - Calibration factor evolution
+    - False positive/negative rates
+    - Accuracy by risk level
+    """
+    try:
+        try:
+            from .history_db import HistoryDatabase
+            from .prediction_engine import PredictionEngine
+        except ImportError:
+            from history_db import HistoryDatabase
+            from prediction_engine import PredictionEngine
+
+        history_db = HistoryDatabase()
+        engine = PredictionEngine()
+        conn = history_db._get_conn()
+        cursor = conn.cursor()
+
+        # Overall performance
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                AVG(hl.predicted_risk) as avg_predicted,
+                SUM(CASE WHEN hf.is_cancelled = 1 THEN 1 ELSE 0 END) as actual_cancelled
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+            WHERE hl.predicted_risk IS NOT NULL
+        """)
+
+        overall = cursor.fetchone()
+        total_preds = overall[0] or 0
+        avg_pred = overall[1] or 0
+        actual_canc = overall[2] or 0
+
+        # Accuracy by threshold (40% cutoff)
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE
+                    WHEN (hl.predicted_risk >= 40 AND hf.is_cancelled = 1)
+                        OR (hl.predicted_risk < 40 AND hf.is_cancelled = 0)
+                    THEN 1 ELSE 0
+                END) as correct,
+                SUM(CASE WHEN hl.predicted_risk >= 40 AND hf.is_cancelled = 0 THEN 1 ELSE 0 END) as false_positives,
+                SUM(CASE WHEN hl.predicted_risk < 40 AND hf.is_cancelled = 1 THEN 1 ELSE 0 END) as false_negatives
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+            WHERE hl.predicted_risk IS NOT NULL
+        """)
+
+        acc = cursor.fetchone()
+        accuracy = (acc[1] / acc[0] * 100) if acc[0] > 0 else 0
+        false_pos = acc[2] or 0
+        false_neg = acc[3] or 0
+
+        # Performance by risk level
+        cursor.execute("""
+            SELECT
+                CASE
+                    WHEN hl.predicted_risk < 10 THEN '0-10%'
+                    WHEN hl.predicted_risk < 20 THEN '10-20%'
+                    WHEN hl.predicted_risk < 40 THEN '20-40%'
+                    WHEN hl.predicted_risk < 70 THEN '40-70%'
+                    ELSE '70-100%'
+                END as risk_bucket,
+                COUNT(*) as predictions,
+                AVG(hl.predicted_risk) as avg_risk,
+                SUM(CASE WHEN hf.is_cancelled = 1 THEN 1 ELSE 0 END) as cancelled,
+                ROUND(SUM(CASE WHEN hf.is_cancelled = 1 THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 1) as actual_rate
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+            WHERE hl.predicted_risk IS NOT NULL
+            GROUP BY risk_bucket
+            ORDER BY avg_risk
+        """)
+
+        by_risk_level = []
+        for row in cursor.fetchall():
+            by_risk_level.append({
+                "risk_bucket": row[0],
+                "predictions": row[1],
+                "avg_predicted": round(row[2], 1),
+                "actual_cancelled": row[3],
+                "actual_rate": row[4] or 0
+            })
+
+        # Recent performance (last 30 days)
+        from datetime import timedelta
+        cutoff_30 = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')
+
+        cursor.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE
+                    WHEN (hl.predicted_risk >= 40 AND hf.is_cancelled = 1)
+                        OR (hl.predicted_risk < 40 AND hf.is_cancelled = 0)
+                    THEN 1 ELSE 0
+                END) as correct
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+            WHERE hl.predicted_risk IS NOT NULL
+                AND substr(hf.flight_date, 1, 10) >= ?
+        """, (cutoff_30,))
+
+        recent = cursor.fetchone()
+        recent_accuracy = (recent[1] / recent[0] * 100) if recent[0] > 0 else 0
+
+        conn.close()
+
+        return {
+            "overall": {
+                "total_predictions": total_preds,
+                "accuracy": round(accuracy, 1),
+                "avg_predicted_risk": round(avg_pred, 1),
+                "actual_cancellations": actual_canc,
+                "actual_rate": round((actual_canc / total_preds * 100), 1) if total_preds > 0 else 0
+            },
+            "recent_30_days": {
+                "total_predictions": recent[0],
+                "accuracy": round(recent_accuracy, 1)
+            },
+            "error_analysis": {
+                "false_positives": false_pos,
+                "false_negatives": false_neg,
+                "false_positive_rate": round((false_pos / total_preds * 100), 1) if total_preds > 0 else 0,
+                "false_negative_rate": round((false_neg / total_preds * 100), 1) if total_preds > 0 else 0
+            },
+            "by_risk_level": by_risk_level,
+            "calibration": {
+                "current_factor": round(engine.calibration_factor, 3),
+                "status": "active" if total_preds >= 30 else "learning"
+            },
+            "generated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting performance metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/monthly-stats")
 async def get_monthly_statistics():
     """
