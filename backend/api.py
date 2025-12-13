@@ -711,6 +711,124 @@ async def refresh_data():
         logger.error(f"Error refreshing data: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/metrics/calibration")
+async def get_calibration_metrics():
+    """
+    Returns prediction calibration and accuracy metrics.
+    Compares predicted risk vs actual cancellation rates to assess model performance.
+
+    This endpoint enables machine learning by showing:
+    - How accurate our predictions are overall
+    - Whether we're over-predicting or under-predicting
+    - Which risk levels are well-calibrated
+    - Calibration error (how far off our predictions are)
+    """
+    try:
+        import sqlite3
+
+        conn = sqlite3.connect(fd.history_db.db_path)
+
+        # Overall metrics: Compare all predictions to actual outcomes
+        cursor = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                AVG(hl.predicted_risk) as avg_predicted,
+                SUM(hf.is_cancelled) as actual_cancelled
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+        """)
+
+        row = cursor.fetchone()
+        total = row[0] or 0
+        avg_predicted = row[1] or 0
+        actual_cancelled = row[2] or 0
+        actual_rate = (actual_cancelled / total * 100) if total > 0 else 0
+
+        # Accuracy calculation (correct predictions)
+        # A prediction is "correct" if:
+        # - Predicted < 40% AND flight landed (true negative)
+        # - Predicted >= 40% AND flight cancelled (true positive)
+        cursor = conn.execute("""
+            SELECT
+                SUM(CASE
+                    WHEN (hl.predicted_risk < 40 AND hf.is_cancelled = 0)
+                      OR (hl.predicted_risk >= 40 AND hf.is_cancelled = 1)
+                    THEN 1 ELSE 0
+                END) as correct
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+        """)
+
+        correct = cursor.fetchone()[0] or 0
+        accuracy = (correct / total * 100) if total > 0 else 0
+
+        # By risk bucket: Show calibration at different prediction levels
+        cursor = conn.execute("""
+            SELECT
+                CASE
+                    WHEN hl.predicted_risk < 10 THEN '0-10%'
+                    WHEN hl.predicted_risk < 20 THEN '10-20%'
+                    WHEN hl.predicted_risk < 30 THEN '20-30%'
+                    WHEN hl.predicted_risk < 40 THEN '30-40%'
+                    WHEN hl.predicted_risk < 50 THEN '40-50%'
+                    WHEN hl.predicted_risk < 70 THEN '50-70%'
+                    ELSE '70-100%'
+                END as bucket,
+                COUNT(*) as count,
+                AVG(hl.predicted_risk) as avg_predicted,
+                SUM(hf.is_cancelled) as cancelled
+            FROM history_log hl
+            JOIN historical_flights hf
+                ON hl.number = hf.flight_number
+                AND substr(hl.scheduled_time, 1, 10) = hf.flight_date
+            GROUP BY bucket
+            ORDER BY MIN(hl.predicted_risk)
+        """)
+
+        buckets = []
+        for row in cursor.fetchall():
+            bucket, count, avg_pred, cancelled = row
+            cancelled = cancelled or 0
+            actual_rate_bucket = (cancelled / count * 100) if count > 0 else 0
+            calibration_error = abs(avg_pred - actual_rate_bucket)
+
+            buckets.append({
+                "bucket": bucket,
+                "predictions": count,
+                "avg_predicted": round(avg_pred, 1),
+                "actual_cancelled": cancelled,
+                "actual_rate": round(actual_rate_bucket, 1),
+                "calibration_error": round(calibration_error, 1)
+            })
+
+        conn.close()
+
+        return {
+            "overall": {
+                "total_predictions": total,
+                "accuracy": round(accuracy, 1),
+                "avg_predicted_risk": round(avg_predicted, 1),
+                "actual_cancellations": actual_cancelled,
+                "actual_rate": round(actual_rate, 1),
+                "calibration_error": round(abs(avg_predicted - actual_rate), 1)
+            },
+            "by_risk_bucket": buckets,
+            "interpretation": {
+                "calibration_error": "Average difference between predicted risk and actual cancellation rate. Lower is better.",
+                "accuracy": "Percentage of correct predictions (using 40% threshold). Higher is better.",
+                "status": "well_calibrated" if abs(avg_predicted - actual_rate) < 5 else "needs_calibration"
+            },
+            "generated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error computing calibration metrics: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/monthly-stats")
 async def get_monthly_statistics():
     """
