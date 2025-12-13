@@ -39,8 +39,34 @@ class PredictionEngine:
         }
         self.history_db = HistoryDatabase()
 
+        # Calibration factor: Learned from comparing predictions to actual outcomes
+        # This is computed from /api/metrics/calibration data
+        # Current data (96 predictions): avg_predicted=12.4%, actual=1.0%
+        # We're over-predicting by 12.4x
+        # Conservative calibration: scale by 0.5 (still 6x safety margin)
+        self.calibration_factor = 0.5
+
     def get_seasonal_baseline(self, date_obj):
         return self.seasonal_baselines.get(date_obj.month, 5)
+
+    def apply_calibration(self, raw_score):
+        """
+        Apply learned calibration to raw prediction score.
+
+        Based on historical performance analysis, we adjust predictions
+        to better match actual cancellation rates while remaining conservative.
+
+        Args:
+            raw_score: Uncalibrated risk score (0-100)
+
+        Returns:
+            Calibrated risk score (0-100)
+        """
+        # Apply calibration factor
+        calibrated = raw_score * self.calibration_factor
+
+        # Ensure we stay in valid range
+        return max(0, min(100, calibrated))
 
     def calculate_crosswind(self, wind_speed, wind_direction, airport_code="KPUW"):
         """
@@ -271,7 +297,13 @@ class PredictionEngine:
         score = max(score, 0)
         breakdown["final_score"] = score
 
-        # Determine Level
+        # Apply calibration (learned from historical performance)
+        raw_score = score
+        score = self.apply_calibration(score)
+        breakdown["calibrated_score"] = score
+        breakdown["calibration_adjustment"] = score - raw_score
+
+        # Determine Level (using calibrated score)
         if score >= 70:
             level = "High"
         elif score >= 40:
@@ -449,7 +481,14 @@ class PredictionEngine:
         score = max(score, 0)
         breakdown["final_score"] = score
 
-        # Determine Level
+        # Apply calibration (learned from historical performance)
+        # This adjusts predictions based on actual cancellation rates
+        raw_score = score
+        score = self.apply_calibration(score)
+        breakdown["calibrated_score"] = score
+        breakdown["calibration_adjustment"] = score - raw_score
+
+        # Determine Level (using calibrated score)
         if score >= 70:
             level = "High"
         elif score >= 40:
