@@ -256,20 +256,24 @@ class HistoryDatabase:
     def get_recent_stats(self, days=30):
         """
         Returns cancellation stats for the last N days.
+        Only counts flights that have actually occurred (not future flights).
         """
         try:
             from datetime import datetime, timedelta
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
 
-            # Calculate cutoff date
+            # Calculate cutoff date (start of period)
             cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+
+            # Only count flights up to today (exclude future flights)
+            today = datetime.now().strftime("%Y-%m-%d")
 
             c.execute("""
                 SELECT COUNT(*), SUM(CASE WHEN is_cancelled THEN 1 ELSE 0 END)
                 FROM historical_flights
-                WHERE flight_date >= ?
-            """, (cutoff,))
+                WHERE flight_date >= ? AND flight_date <= ?
+            """, (cutoff, today))
 
             row = c.fetchone()
             conn.close()
