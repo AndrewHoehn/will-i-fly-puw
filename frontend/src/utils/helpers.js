@@ -113,7 +113,7 @@ export const formatMultiAirportWeather = (flight) => {
   const otherCode = type === 'arrival' ? origin : destination
   const otherWeather = multi_airport_weather[otherCode]
 
-  // Helper to format compact weather (optimized to prevent wrapping)
+  // Helper to format compact weather (show full details now that we have space)
   const formatCompact = (weather) => {
     if (!weather) return '–'
     const parts = []
@@ -123,36 +123,20 @@ export const formatMultiAirportWeather = (flight) => {
       parts.push(`${Math.round(weather.temperature_f)}°`)
     }
 
-    // Visibility (only show if concerning, otherwise omit to save space)
+    // Visibility (always show, compact format)
     if (weather.visibility_miles != null) {
       const vis = weather.visibility_miles
       if (vis < 3) {
-        // Only show concerning visibility
         parts.push(`${vis.toFixed(1)}mi`)
+      } else {
+        parts.push(`${Math.round(vis)}mi`)
       }
     }
 
-    // Wind (compact format)
+    // Wind (show gusts preferentially)
     const effectiveWind = weather.wind_gust_knots || weather.wind_speed_knots
     if (effectiveWind != null) {
-      // Only show wind if significant (> 10kn)
-      if (effectiveWind >= 10) {
-        parts.push(`${Math.round(effectiveWind)}kn`)
-      }
-    }
-
-    // Snow depth (only if present)
-    if (weather.snow_depth_in != null && weather.snow_depth_in > 1) {
-      parts.push(`${Math.round(weather.snow_depth_in)}"`)
-    }
-
-    // Active precipitation (only if significant)
-    if (weather.precipitation_in != null && weather.precipitation_in > 0.1) {
-      if (weather.temperature_f != null && weather.temperature_f < 32) {
-        parts.push('❄')
-      } else {
-        parts.push('🌧')
-      }
+      parts.push(`${Math.round(effectiveWind)}kn`)
     }
 
     return parts.length > 0 ? parts.join(' · ') : '✓'

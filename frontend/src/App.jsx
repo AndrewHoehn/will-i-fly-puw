@@ -585,7 +585,7 @@ const FlightTable = ({ flights, isFuture, onRiskClick }) => {
                   <th>Aircraft</th>
                   <th>Status</th>
                   <th>Weather</th>
-                  <th>Cancel Chance</th>
+                  <th style={{ lineHeight: '1.2' }}>Cancel<br/>Chance</th>
                   <th>Prediction</th>
                   {!isFuture && <th>Accuracy</th>}
                 </tr>
@@ -664,7 +664,7 @@ const FlightRow = ({ flight, isFuture, onRiskClick }) => {
       {/* Flight Number */}
       <td className="flight-cell">
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span className="flight-number">{flight.airline} {flight.number}</span>
+          <span className="flight-number">{flight.number}</span>
           <a href={trackUrl} target="_blank" rel="noreferrer" className="track-link" title="Track on FlightAware">
             <ExternalLink size={12} />
           </a>
@@ -677,8 +677,8 @@ const FlightRow = ({ flight, isFuture, onRiskClick }) => {
           {isArrival ? <Plane size={14} style={{ transform: 'rotate(90deg)' }} /> : <Plane size={14} style={{ transform: 'rotate(-45deg)' }} />}
           <span>
             {isArrival
-              ? `${formatAirportFull(flight.origin)} → Pullman`
-              : `Pullman → ${formatAirportFull(flight.destination)}`
+              ? `${formatAirport(flight.origin)} → PUW`
+              : `PUW → ${formatAirport(flight.destination)}`
             }
           </span>
         </div>
