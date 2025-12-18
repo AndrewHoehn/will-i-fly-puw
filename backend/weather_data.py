@@ -85,6 +85,8 @@ class WeatherData:
                 humidity = hourly.get('relative_humidity_2m', [])
                 pressure = hourly.get('surface_pressure', [])
 
+                logger.info(f"Fetched {len(times)} hours of weather for {airport_code}")
+
                 for i, t_str in enumerate(times):
                     dt = datetime.fromisoformat(t_str).replace(tzinfo=timezone.utc)
                     # Convert visibility to miles
@@ -111,11 +113,16 @@ class WeatherData:
 
             logger.info(f"Fetched comprehensive weather for {airport_code} ({airport['name']}): {len(weather_map)} hours")
 
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Network error fetching weather for {airport_code}: {e}")
         except Exception as e:
-            logger.error(f"Error fetching weather for {airport_code}: {e}")
+            logger.error(f"Error fetching weather for {airport_code}: {e}", exc_info=True)
 
         # HYBRID APPROACH: Overlay METAR data for current conditions
         weather_map = self._overlay_metar_data(airport_code, weather_map)
+
+        if not weather_map:
+            logger.warning(f"No weather data available for {airport_code} after all fetch attempts")
 
         return weather_map
 

@@ -228,8 +228,29 @@ def process_flights():
         lookup_time = sched_dt.replace(minute=0, second=0, microsecond=0)
         if sched_dt.minute >= 30:
             lookup_time = lookup_time + timedelta(hours=1)
-        
+
+        # Try multiple lookup strategies for robustness
         w_cond = weather_map.get(lookup_time.replace(tzinfo=None)) or weather_map.get(lookup_time)
+
+        # Fallback: If exact time not found, look for nearest weather within ±3 hours
+        if not w_cond:
+            best_match = None
+            min_diff = None
+            for wt, wd in weather_map.items():
+                # Ensure both times are timezone-aware for comparison
+                if wt.tzinfo is None:
+                    wt = wt.replace(tzinfo=timezone.utc)
+                lt = lookup_time if lookup_time.tzinfo else lookup_time.replace(tzinfo=timezone.utc)
+
+                diff = abs((wt - lt).total_seconds())
+                if diff <= 10800:  # Within 3 hours
+                    if min_diff is None or diff < min_diff:
+                        min_diff = diff
+                        best_match = wd
+
+            if best_match:
+                w_cond = best_match
+                logger.debug(f"Used fallback weather lookup for {f.get('number')} (±{min_diff/3600:.1f}h)")
         w_info = None
         is_adverse_weather = False
         if w_cond:
@@ -383,7 +404,8 @@ def process_flights():
 
             # Build multi-airport weather dict for frontend
             multi_airport_weather = {}
-            if puw_weather:
+            # Always include KPUW, even if data is null (shows we attempted to fetch it)
+            if puw_weather is not None:  # Check for None specifically, not empty dict
                 multi_airport_weather['KPUW'] = {
                     'visibility_miles': puw_weather.get('visibility_miles'),
                     'wind_speed_knots': puw_weather.get('wind_speed_knots'),
