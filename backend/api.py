@@ -1103,6 +1103,69 @@ async def get_performance_metrics():
         logger.error(f"Error getting performance metrics: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/metrics/update-weights")
+async def update_prediction_weights(min_samples: int = 50):
+    """
+    Update prediction scoring weights based on feature importance analysis.
+
+    This endpoint triggers the self-learning weight adjustment system that:
+    - Analyzes which weather factors correlate with actual cancellations
+    - Adjusts scoring weights based on historical data
+    - Saves learned weights for future predictions
+
+    Args:
+        min_samples: Minimum flights required before adjusting (default: 50)
+
+    Returns:
+        Status and details of weight adjustment
+    """
+    try:
+        engine = PredictionEngine()
+        result = engine.update_weights_from_feature_importance(min_samples=min_samples)
+
+        return {
+            **result,
+            "generated_at": datetime.now(timezone.utc).isoformat()
+        }
+
+    except Exception as e:
+        logger.error(f"Error updating weights: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/metrics/current-weights")
+async def get_current_weights():
+    """
+    Get the current prediction scoring weights.
+
+    Returns:
+        Current weights with adjustment factors and training metadata
+    """
+    try:
+        import json
+        import os
+
+        weights_path = os.path.join(os.path.dirname(__file__), 'learned_weights.json')
+
+        if os.path.exists(weights_path):
+            with open(weights_path, 'r') as f:
+                weights_config = json.load(f)
+                return {
+                    **weights_config,
+                    "status": "loaded"
+                }
+        else:
+            # Return default weights
+            engine = PredictionEngine()
+            return {
+                "status": "default",
+                "weights": engine._get_default_weights(),
+                "message": "Using default weights (no learned weights file found)"
+            }
+
+    except Exception as e:
+        logger.error(f"Error getting current weights: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/monthly-stats")
 async def get_monthly_statistics():
     """

@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "last_updated": "2025-12-18T18:10:56.559148+00:00",
+  "training_data_size": 1172,
+  "weights": {
+    "visibility": {
+      "critical": 60,
+      "low": 40,
+      "reduced": 15,
+      "adjustment_factor": 0.91
+    },
+    "crosswind": {
+      "extreme": 50,
+      "high": 30,
+      "moderate": 10,
+      "adjustment_factor": 1.0
+    },
+    "wind": {
+      "extreme": 50,
+      "high": 30,
+      "breezy": 10,
+      "adjustment_factor": 1.0
+    },
+    "icing": {
+      "base": 25,
+      "adjustment_factor": 1.36
+    }
+  },
+  "feature_importance": {
+    "temperature_freezing": {
+      "lift": 3.6,
+      "sample_size": 67,
+      "cancel_rate": 4.5
+    },
+    "visibility_critical": {
+      "lift": -0.9,
+      "sample_size": 23,
+      "cancel_rate": 0.0
+    },
+    "wind_extreme": {
+      "lift": 0,
+      "sample_size": 0,
+      "cancel_rate": 0
+    }
+  }
+}

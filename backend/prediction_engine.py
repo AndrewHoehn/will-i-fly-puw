@@ -1,6 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from .history_db import HistoryDatabase
 import math
+import json
+import os
+import logging
+
+logger = logging.getLogger(__name__)
 
 class RiskScore:
     def __init__(self, score, factors, risk_level, breakdown, detailed_factors):
@@ -42,6 +47,12 @@ class PredictionEngine:
         # Dynamic calibration: Automatically computed from actual performance
         # Falls back to conservative default if insufficient data
         self.calibration_factor = self._compute_calibration_factor()
+
+        # Load learned weights (dynamically adjusted based on feature importance)
+        self.weights = self._load_learned_weights()
+
+        # Path to weights file
+        self.weights_path = os.path.join(os.path.dirname(__file__), 'learned_weights.json')
 
     def get_seasonal_baseline(self, date_obj):
         return self.seasonal_baselines.get(date_obj.month, 5)
@@ -119,9 +130,186 @@ class PredictionEngine:
 
         except Exception as e:
             # If anything goes wrong, fall back to conservative default
-            import logging
-            logging.warning(f"Error computing calibration factor: {e}")
+            logger.warning(f"Error computing calibration factor: {e}")
             return 0.5
+
+    def _load_learned_weights(self):
+        """
+        Load learned weights from JSON file.
+        Falls back to default weights if file doesn't exist or is invalid.
+
+        Returns:
+            dict: Weights configuration with adjustment factors
+        """
+        try:
+            weights_path = os.path.join(os.path.dirname(__file__), 'learned_weights.json')
+
+            if os.path.exists(weights_path):
+                with open(weights_path, 'r') as f:
+                    weights_config = json.load(f)
+                    logger.info(f"Loaded learned weights (version {weights_config.get('version', 0)}, "
+                               f"{weights_config.get('training_data_size', 0)} training samples)")
+                    return weights_config['weights']
+            else:
+                logger.info("No learned weights file found, using default weights")
+                return self._get_default_weights()
+
+        except Exception as e:
+            logger.warning(f"Error loading learned weights: {e}, using defaults")
+            return self._get_default_weights()
+
+    def _get_default_weights(self):
+        """
+        Get default weight configuration (original hardcoded values).
+
+        Returns:
+            dict: Default weights with adjustment_factor = 1.0
+        """
+        return {
+            "visibility": {
+                "critical": 60,
+                "low": 40,
+                "reduced": 15,
+                "adjustment_factor": 1.0
+            },
+            "crosswind": {
+                "extreme": 50,
+                "high": 30,
+                "moderate": 10,
+                "adjustment_factor": 1.0
+            },
+            "wind": {
+                "extreme": 50,
+                "high": 30,
+                "breezy": 10,
+                "adjustment_factor": 1.0
+            },
+            "icing": {
+                "base": 25,
+                "adjustment_factor": 1.0
+            }
+        }
+
+    def update_weights_from_feature_importance(self, min_samples=50):
+        """
+        Update scoring weights based on feature importance analysis.
+
+        Uses actual correlation data to adjust weights:
+        - Features with high lift → increase weight
+        - Features with low/negative lift → decrease weight
+        - Conservative adjustments to avoid overcorrection
+
+        Args:
+            min_samples: Minimum number of flights required before adjusting weights
+
+        Returns:
+            dict: Updated weights configuration with statistics
+        """
+        try:
+            # Get feature importance analysis
+            analysis = self.history_db.analyze_feature_importance()
+
+            total_flights = analysis['total_flights']
+            baseline_rate = analysis['baseline_cancellation_rate']
+
+            # Don't adjust weights until we have sufficient data
+            if total_flights < min_samples:
+                logger.info(f"Insufficient data for weight adjustment ({total_flights} < {min_samples})")
+                return {
+                    'status': 'insufficient_data',
+                    'total_flights': total_flights,
+                    'required': min_samples
+                }
+
+            # Calculate adjustment factors based on lift values
+            adjustments = {}
+
+            # Visibility adjustment - find the most critical threshold (< 0.5mi)
+            vis_conditions = analysis['features']['visibility']
+            vis_critical = next((c for c in vis_conditions if '< 0.5' in c['condition']), None)
+
+            if vis_critical and vis_critical['flights'] >= 10:
+                vis_lift = vis_critical['lift']
+                # Lift to adjustment factor mapping
+                # +5% lift → 1.5x weight, 0% lift → 1.0x, -5% lift → 0.5x
+                vis_adjustment = 1.0 + (vis_lift / 10.0)  # Conservative scaling
+                vis_adjustment = max(0.3, min(1.5, vis_adjustment))  # Clamp to [0.3, 1.5]
+                adjustments['visibility'] = vis_adjustment
+
+            # Wind adjustment - find the extreme threshold (> 40kt)
+            wind_conditions = analysis['features']['wind']
+            wind_extreme = next((c for c in wind_conditions if '> 40' in c['condition']), None)
+
+            if wind_extreme and wind_extreme['flights'] >= 10:
+                wind_lift = wind_extreme['lift']
+                wind_adjustment = 1.0 + (wind_lift / 10.0)
+                wind_adjustment = max(0.3, min(1.5, wind_adjustment))
+                adjustments['wind'] = wind_adjustment
+                adjustments['crosswind'] = wind_adjustment  # Apply same to crosswind
+
+            # Temperature/Icing adjustment - find freezing conditions
+            temp_conditions = analysis['features']['temperature']
+            freezing = next((c for c in temp_conditions if '32' in c['condition']), None)
+
+            if freezing and freezing['flights'] >= 10:
+                freezing_lift = freezing['lift']
+                icing_adjustment = 1.0 + (freezing_lift / 10.0)
+                icing_adjustment = max(0.5, min(2.0, icing_adjustment))  # Allow higher boost for icing
+                adjustments['icing'] = icing_adjustment
+
+            # Apply adjustments to weights
+            updated_weights = self._get_default_weights()
+
+            for category, factor in adjustments.items():
+                if category in updated_weights:
+                    updated_weights[category]['adjustment_factor'] = round(factor, 2)
+
+            # Save updated weights
+            weights_config = {
+                'version': 1,
+                'last_updated': datetime.now(timezone.utc).isoformat(),
+                'training_data_size': total_flights,
+                'weights': updated_weights,
+                'feature_importance': {
+                    'temperature_freezing': {
+                        'lift': round(freezing['lift'], 2) if freezing else 0,
+                        'sample_size': freezing['flights'] if freezing else 0,
+                        'cancel_rate': freezing['rate'] if freezing else 0
+                    },
+                    'visibility_critical': {
+                        'lift': round(vis_critical['lift'], 2) if vis_critical else 0,
+                        'sample_size': vis_critical['flights'] if vis_critical else 0,
+                        'cancel_rate': vis_critical['rate'] if vis_critical else 0
+                    },
+                    'wind_extreme': {
+                        'lift': round(wind_extreme['lift'], 2) if wind_extreme else 0,
+                        'sample_size': wind_extreme['flights'] if wind_extreme else 0,
+                        'cancel_rate': wind_extreme['rate'] if wind_extreme else 0
+                    }
+                }
+            }
+
+            with open(self.weights_path, 'w') as f:
+                json.dump(weights_config, f, indent=2)
+
+            logger.info(f"Updated learned weights based on {total_flights} flights: {adjustments}")
+
+            # Reload weights
+            self.weights = self._load_learned_weights()
+
+            return {
+                'status': 'success',
+                'adjustments': adjustments,
+                'total_flights': total_flights,
+                'baseline_rate': baseline_rate
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating weights from feature importance: {e}", exc_info=True)
+            return {
+                'status': 'error',
+                'message': str(e)
+            }
 
     def apply_calibration(self, raw_score):
         """
@@ -215,27 +403,36 @@ class PredictionEngine:
                     "details": {"month": dt.strftime('%B'), "baseline": baseline}
                 })
         
-        # 2. Weather Heuristics
+        # 2. Weather Heuristics (using learned weights)
         weather_score = 0
         if weather:
+            # Get adjustment factors from learned weights
+            vis_factor = self.weights['visibility']['adjustment_factor']
+            wind_factor = self.weights['wind']['adjustment_factor']
+            crosswind_factor = self.weights['crosswind']['adjustment_factor']
+            icing_factor = self.weights['icing']['adjustment_factor']
+
             # Visibility
             vis = weather.get('visibility_miles')
             if vis is not None:
                 if vis < 0.5:
-                    weather_score += 60
+                    penalty = int(self.weights['visibility']['critical'] * vis_factor)
+                    weather_score += penalty
                     desc = f"Critical Visibility ({vis}mi)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Visibility", "value": vis, "penalty": 60}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Visibility", "value": vis, "penalty": penalty}})
                 elif vis < 1.0:
-                    weather_score += 40
+                    penalty = int(self.weights['visibility']['low'] * vis_factor)
+                    weather_score += penalty
                     desc = f"Low Visibility ({vis}mi)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Visibility", "value": vis, "penalty": 40}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Visibility", "value": vis, "penalty": penalty}})
                 elif vis < 3.0:
-                    weather_score += 15
+                    penalty = int(self.weights['visibility']['reduced'] * vis_factor)
+                    weather_score += penalty
                     desc = f"Reduced Visibility ({vis}mi)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Visibility", "value": vis, "penalty": 15}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Visibility", "value": vis, "penalty": penalty}})
 
             # Wind (using crosswind component)
             wind = weather.get('wind_speed_knots')
@@ -247,47 +444,54 @@ class PredictionEngine:
             if crosswind is not None:
                 # Use crosswind component for more accurate risk assessment
                 if crosswind > 25:
-                    weather_score += 50
+                    penalty = int(self.weights['crosswind']['extreme'] * crosswind_factor)
+                    weather_score += penalty
                     desc = f"Extreme Crosswind ({crosswind:.1f}kt, Wind {wind:.0f}kt @ {wind_dir:.0f}°)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Crosswind", "crosswind": round(crosswind, 1), "wind_speed": wind, "wind_direction": wind_dir, "penalty": 50}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Crosswind", "crosswind": round(crosswind, 1), "wind_speed": wind, "wind_direction": wind_dir, "penalty": penalty}})
                 elif crosswind > 15:
-                    weather_score += 30
+                    penalty = int(self.weights['crosswind']['high'] * crosswind_factor)
+                    weather_score += penalty
                     desc = f"High Crosswind ({crosswind:.1f}kt, Wind {wind:.0f}kt @ {wind_dir:.0f}°)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Crosswind", "crosswind": round(crosswind, 1), "wind_speed": wind, "wind_direction": wind_dir, "penalty": 30}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Crosswind", "crosswind": round(crosswind, 1), "wind_speed": wind, "wind_direction": wind_dir, "penalty": penalty}})
                 elif crosswind > 10:
-                    weather_score += 10
+                    penalty = int(self.weights['crosswind']['moderate'] * crosswind_factor)
+                    weather_score += penalty
                     desc = f"Moderate Crosswind ({crosswind:.1f}kt, Wind {wind:.0f}kt @ {wind_dir:.0f}°)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Crosswind", "crosswind": round(crosswind, 1), "wind_speed": wind, "wind_direction": wind_dir, "penalty": 10}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Crosswind", "crosswind": round(crosswind, 1), "wind_speed": wind, "wind_direction": wind_dir, "penalty": penalty}})
             elif wind is not None:
                 # Fallback to total wind if direction is unavailable
                 if wind > 40:
-                    weather_score += 50
+                    penalty = int(self.weights['wind']['extreme'] * wind_factor)
+                    weather_score += penalty
                     desc = f"Extreme Wind ({wind}kt)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Wind", "value": wind, "penalty": 50}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Wind", "value": wind, "penalty": penalty}})
                 elif wind > 30:
-                    weather_score += 30
+                    penalty = int(self.weights['wind']['high'] * wind_factor)
+                    weather_score += penalty
                     desc = f"High Wind ({wind}kt)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Wind", "value": wind, "penalty": 30}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Wind", "value": wind, "penalty": penalty}})
                 elif wind > 20:
-                    weather_score += 10
+                    penalty = int(self.weights['wind']['breezy'] * wind_factor)
+                    weather_score += penalty
                     desc = f"Breezy ({wind}kt)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Wind", "value": wind, "penalty": 10}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Wind", "value": wind, "penalty": penalty}})
 
             # Temperature / Precip (Icing Risk)
             temp = weather.get('temperature_f')
             desc_text = weather.get('description', '').lower()
             if temp is not None and temp < 32:
                 if 'snow' in desc_text or 'rain' in desc_text or 'drizzle' in desc_text or 'fog' in desc_text:
-                    weather_score += 25
+                    penalty = int(self.weights['icing']['base'] * icing_factor)
+                    weather_score += penalty
                     desc = "Icing Conditions (Freezing Precip/Fog)"
                     factors.append(desc)
-                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Icing", "temp": temp, "penalty": 25}})
+                    detailed_factors.append({"category": "Weather", "description": desc, "details": {"type": "Icing", "temp": temp, "penalty": penalty}})
         
         score += weather_score
         breakdown["weather_score"] = weather_score
