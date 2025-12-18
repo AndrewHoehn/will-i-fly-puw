@@ -236,7 +236,7 @@ def process_flights():
         if not w_cond:
             best_match = None
             min_diff = None
-            for wt, wd in weather_map.items():
+            for wt, weather_data in weather_map.items():
                 # Ensure both times are timezone-aware for comparison
                 if wt.tzinfo is None:
                     wt = wt.replace(tzinfo=timezone.utc)
@@ -246,7 +246,7 @@ def process_flights():
                 if diff <= 10800:  # Within 3 hours
                     if min_diff is None or diff < min_diff:
                         min_diff = diff
-                        best_match = wd
+                        best_match = weather_data
 
             if best_match:
                 w_cond = best_match
