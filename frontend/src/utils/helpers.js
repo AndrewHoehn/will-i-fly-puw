@@ -113,43 +113,43 @@ export const formatMultiAirportWeather = (flight) => {
   const otherCode = type === 'arrival' ? origin : destination
   const otherWeather = multi_airport_weather[otherCode]
 
-  // Helper to format compact weather
+  // Helper to format compact weather (optimized to prevent wrapping)
   const formatCompact = (weather) => {
     if (!weather) return '–'
     const parts = []
 
-    // Temperature
+    // Temperature (always show)
     if (weather.temperature_f != null) {
       parts.push(`${Math.round(weather.temperature_f)}°`)
     }
 
-    // Visibility (always show)
+    // Visibility (only show if concerning, otherwise omit to save space)
     if (weather.visibility_miles != null) {
       const vis = weather.visibility_miles
-      // Show more precision for low visibility
       if (vis < 3) {
+        // Only show concerning visibility
         parts.push(`${vis.toFixed(1)}mi`)
-      } else {
-        parts.push(`${Math.round(vis)}mi`)
       }
     }
 
-    // Wind - prefer gusts over sustained
-    if (weather.wind_gust_knots != null && weather.wind_gust_knots > weather.wind_speed_knots) {
-      parts.push(`G${Math.round(weather.wind_gust_knots)}kn`)
-    } else if (weather.wind_speed_knots != null) {
-      parts.push(`${Math.round(weather.wind_speed_knots)}kn`)
+    // Wind (compact format)
+    const effectiveWind = weather.wind_gust_knots || weather.wind_speed_knots
+    if (effectiveWind != null) {
+      // Only show wind if significant (> 10kn)
+      if (effectiveWind >= 10) {
+        parts.push(`${Math.round(effectiveWind)}kn`)
+      }
     }
 
-    // Snow depth (compact)
-    if (weather.snow_depth_in != null && weather.snow_depth_in > 0) {
-      parts.push(`${weather.snow_depth_in.toFixed(1)}"❄`)
+    // Snow depth (only if present)
+    if (weather.snow_depth_in != null && weather.snow_depth_in > 1) {
+      parts.push(`${Math.round(weather.snow_depth_in)}"`)
     }
 
-    // Active precipitation (icon only for compact display)
-    if (weather.precipitation_in != null && weather.precipitation_in > 0.05) {
+    // Active precipitation (only if significant)
+    if (weather.precipitation_in != null && weather.precipitation_in > 0.1) {
       if (weather.temperature_f != null && weather.temperature_f < 32) {
-        parts.push('🌨')
+        parts.push('❄')
       } else {
         parts.push('🌧')
       }
